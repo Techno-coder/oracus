@@ -1,18 +1,30 @@
+use oracus::node::Identifier;
+
 fn main() {
 	let text = r#"
 using namespace std;
 
+int modify(int& x) {
+	x += 5;
+	return x + 10;
+}
+
 int main() {
 	int i = 0;
-	for (; i < 10; ++i)
-		if (i == 5) break;
+	for (; i < 10; ++i) {
+		if (i == 5) {
+			i = 0;
+			break;
+		}
+	}
 
 	while (i < 10) i++;
+	auto value = modify(i);
 	return i;
 }
 	"#;
 
-	let roots = match oracus::parser::parse(&text) {
+	let program = match oracus::parser::parse(&text) {
 		Ok(roots) => roots,
 		Err(error) => {
 			println!("{:?}", error.node);
@@ -22,10 +34,8 @@ int main() {
 	};
 
 	let context = &mut oracus::execute::ExecutionContext::default();
-	match &roots[1] {
-		oracus::node::RootNode::Function(function) => {
-			println!("{:?}", oracus::execute::function(context, function));
-		}
+	match program.functions[&oracus::node::Path::single(Identifier("main"))].first() {
+		Some(function) => println!("{:?}", oracus::execute::function(&program, context, function, Vec::new())),
 		_ => panic!("Invalid"),
 	}
 }

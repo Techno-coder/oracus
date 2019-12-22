@@ -1,5 +1,5 @@
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::node::{Function, Identifier, Path, RootNode, Type};
+use crate::node::{Function, Identifier, Path, ProgramContext, Root, Type};
 use crate::span::Spanned;
 use crate::symbol::SymbolContext;
 
@@ -19,14 +19,22 @@ pub enum ParserError {
 	UndefinedPath,
 }
 
-pub fn parse(string: &str) -> ParserResult<Vec<RootNode>> {
+pub fn parse(string: &str) -> ParserResult<ProgramContext> {
 	let lexer = &mut Lexer::new(string);
 	let context = &mut SymbolContext::new();
-	std::iter::from_fn(|| root(context, lexer).transpose()).collect()
+	let mut program = ProgramContext::default();
+	while let Some(root) = root(context, lexer)? {
+		if let Root::Function(function) = root {
+			let path = Path::single(function.identifier.clone());
+			let entry = program.functions.entry(path);
+			entry.or_default().push(function);
+		}
+	}
+	Ok(program)
 }
 
 fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
-            -> ParserResult<Option<RootNode<'a>>> {
+            -> ParserResult<Option<Root<'a>>> {
 	let token = lexer.peek();
 	Ok(Some(match token.node {
 		Token::Hash => {
@@ -68,31 +76,34 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 				_ => (),
 			}
 
-			RootNode::Include(identifier)
+			Root::Include(identifier)
 		}
 		Token::Identifier("using") => {
 			expect(lexer.skip(), Token::Identifier("namespace"))?;
 			let identifier = identifier(lexer)?;
 			expect(lexer, Token::Terminator)?;
 			context.inclusions.insert(identifier.node.clone());
-			RootNode::UsingNamespace(identifier)
+			Root::UsingNamespace(identifier)
 		}
 		Token::Identifier(_) => {
 			let return_type = parse_type(lexer)?;
 			let identifier = identifier(lexer)?.node;
 			context.functions.insert(Path::single(identifier.clone()));
 
-			let mut parameters = Vec::new();
-			expect(lexer, Token::BracketOpen)?;
-			list(lexer, Token::BracketClose, |lexer| {
-				let parameter_type = parse_type(lexer)?;
-				let identifier = self::identifier(lexer)?.node;
-				Ok(parameters.push((identifier, parameter_type)))
-			})?;
+			context.scope(|context| {
+				let mut parameters = Vec::new();
+				expect(lexer, Token::BracketOpen)?;
+				list(lexer, Token::BracketClose, |lexer| {
+					let parameter_type = parse_type(lexer)?;
+					let identifier = self::identifier(lexer)?.node;
+					context.variable(Path::single(identifier.clone()));
+					Ok(parameters.push((identifier, parameter_type)))
+				})?;
 
-			let body = crate::statement::scope(context, lexer)?;
-			let function = Function { return_type, identifier, parameters, body };
-			RootNode::Function(function)
+				let body = crate::statement::scope(context, lexer)?;
+				let function = Function { return_type, identifier, parameters, body };
+				Ok(Root::Function(function))
+			})?
 		}
 		Token::End => return Ok(None),
 		_ => return Err(Spanned::new(ParserError::ExpectedRoot, token.span)),

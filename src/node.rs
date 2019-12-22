@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::span::Spanned;
@@ -43,7 +44,7 @@ impl<'a> fmt::Display for Path<'a> {
 	}
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
 	Concrete(Path<'a>, Vec<Type<'a>>),
 	Reference(Box<Type<'a>>),
@@ -77,8 +78,13 @@ impl<'a> fmt::Display for Type<'a> {
 	}
 }
 
+#[derive(Debug, Default)]
+pub struct ProgramContext<'a> {
+	pub functions: HashMap<Path<'a>, Vec<Function<'a>>>
+}
+
 #[derive(Debug)]
-pub enum RootNode<'a> {
+pub enum Root<'a> {
 	Include(Spanned<Identifier<'a>>),
 	UsingNamespace(Spanned<Identifier<'a>>),
 	Constant(Type<'a>, Identifier<'a>, Expression<'a>),
