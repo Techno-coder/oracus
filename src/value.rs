@@ -1,253 +1,207 @@
-use crate::lexer::{Lexer, Token};
-use crate::node::{BinaryOperator, Expression, PostUnaryOperator, UnaryOperator, ValueOperator};
-use crate::parser::{self, ParserError, ParserResult};
-use crate::span::Spanned;
-use crate::symbol::SymbolContext;
+use std::collections::HashMap;
 
-pub fn expression_root<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                           -> ParserResult<Expression<'a>> {
-	expression(context, lexer, 0)
+use Value::*;
+
+use crate::execute::{ExecutionContext, ExecutionError, ExecutionResult, Field, Reference};
+use crate::node::{BinaryOperator, Expression, PostUnaryOperator, Type, UnaryOperator, ValueOperator};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value<'a> {
+	Float(f64),
+	Integer(i128),
+	Boolean(bool),
+	Character(char),
+	String(std::string::String),
+	List(Vec<Value<'a>>),
+	Array(Vec<Value<'a>>),
+	Vector(Vec<Value<'a>>),
+	Reference(Reference<'a>),
+	Structure(HashMap<Field<'a>, Value<'a>>),
+	Uninitialised,
+	Void,
 }
 
-fn expression<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
-                  precedence: usize) -> ParserResult<Expression<'a>> {
-	let mut left = terminal(context, lexer)?;
-	while self::precedence(&lexer.peek().node) > precedence {
-		left = binder(context, lexer, left)?;
-	}
-	Ok(left)
-}
-
-fn precedence(token: &Token) -> usize {
-	match token {
-		Token::Increment | Token::Decrement |
-		Token::SquareOpen | Token::Access | Token::DereferenceAccess => 12,
-		Token::Asterisk | Token::Divide | Token::Modulo => 11,
-		Token::Add | Token::Minus => 10,
-		Token::ShiftLeft => 9,
-		Token::AngleLeft | Token::AngleRight |
-		Token::LessEqual | Token::GreaterEqual => 8,
-		Token::Equal | Token::NotEqual => 7,
-		Token::Ampersand => 6,
-		Token::ExclusiveOr => 5,
-		Token::Or => 4,
-		Token::LogicalAnd => 3,
-		Token::LogicalOr => 2,
-		Token::Ternary | Token::Assign | Token::Assignment(_) => 1,
-		_ => 0,
+impl<'a> Value<'a> {
+	pub fn boolean(self) -> bool {
+		match self {
+			Boolean(boolean) => boolean,
+			other => panic!("Condition: {:?}, must be boolean", other),
+		}
 	}
 }
 
-fn binder<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
-              mut left: Expression<'a>) -> ParserResult<Expression<'a>> {
-	let binder = lexer.next().node;
-	let precedence = precedence(&binder);
-
-	match binder {
-		Token::Ternary => {
-			let branch = Box::new(expression_root(context, lexer)?);
-			parser::expect(lexer, Token::Separator)?;
-			let default = Box::new(expression_root(context, lexer)?);
-			return Ok(Expression::Ternary(Box::new(left), branch, default));
-		}
-		Token::Assign => return Ok(Expression::Assign(Box::new(left),
-			Box::new(expression(context, lexer, precedence - 1)?))),
-		Token::Assignment(operator) => return Ok(Expression::BinaryAssign(operator,
-			Box::new(left), Box::new(expression(context, lexer, precedence - 1)?))),
-		Token::SquareOpen => {
-			let index = Box::new(expression_root(context, lexer)?);
-			parser::expect(lexer, Token::SquareClose)?;
-			return Ok(Expression::Index(Box::new(left), index));
-		}
-		Token::Access | Token::DereferenceAccess => {
-			let access = parser::identifier(lexer)?.node;
-			if binder == Token::DereferenceAccess {
-				left = Expression::Dereference(Box::new(left));
+pub fn evaluate<'a>(context: &mut ExecutionContext<'a>,
+                    expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
+	Ok(match expression {
+		Expression::Float(float) => Float(*float),
+		Expression::Integer(integer) => Integer(*integer),
+		Expression::Boolean(boolean) => Boolean(*boolean),
+		Expression::String(string) => String(string.to_string()),
+		Expression::Character(character) => Character(*character),
+		Expression::Variable(variable) => Value::Reference(context.variable(variable)),
+		Expression::InitializerList(expressions) => List(expressions.iter().map(|expression|
+			concrete(context, expression)).collect::<Result<_, _>>()?),
+		Expression::Construction(structure, arguments) =>
+			construct(context, structure, arguments)?,
+		Expression::Unary(operator, expression) => {
+			let value = evaluate(context, expression)?;
+			if let Value::Reference(reference) = &value {
+				match (operator, context.dereference(reference)?) {
+					(UnaryOperator::Increment, Float(float)) =>
+						return Ok(Float(*thread(float, |float| **float += 1.0))),
+					(UnaryOperator::Decrement, Float(float)) =>
+						return Ok(Float(*thread(float, |float| **float -= 1.0))),
+					(UnaryOperator::Increment, Integer(integer)) =>
+						return Ok(Integer(*thread(integer, |integer| **integer += 1))),
+					(UnaryOperator::Decrement, Integer(integer)) =>
+						return Ok(Integer(*thread(integer, |integer| **integer -= 1))),
+					_ => (),
+				}
 			}
 
-			return Ok(match lexer.peek().node {
-				Token::BracketOpen => Expression::MethodCall(Box::new(left),
-					access, arguments(context, lexer)?),
-				_ => Expression::Field(Box::new(left), access),
-			});
+			match (&operator, context.concrete(value)?) {
+				(UnaryOperator::Minus, Float(float)) => Float(-float),
+				(UnaryOperator::Minus, Integer(integer)) => Integer(-integer),
+				(UnaryOperator::Not, Boolean(boolean)) => Boolean(!boolean),
+				(_, value) => panic!("Invalid operation: {:?}, on value: {:?}", operator, value),
+			}
 		}
-		Token::Increment => return Ok(PostUnaryOperator::Increment)
-			.map(|operator| Expression::PostUnary(operator, Box::new(left))),
-		Token::Decrement => return Ok(PostUnaryOperator::Decrement)
-			.map(|operator| Expression::PostUnary(operator, Box::new(left))),
-		Token::ShiftLeft => return match lexer.peek().node {
-			Token::Assign => lexer.thread(Ok(ValueOperator::ShiftLeft))
-				.and_then(|operator| Ok(Expression::BinaryAssign(operator, Box::new(left),
-					Box::new(expression(context, lexer, precedence)?)))),
-			_ => Ok(Expression::Binary(BinaryOperator::Value(ValueOperator::ShiftLeft),
-				Box::new(left), Box::new(expression(context, lexer, precedence)?)))
+		Expression::PostUnary(operator, expression) => match evaluate(context, expression)? {
+			Value::Reference(reference) => match (operator, context.dereference(&reference)?) {
+				(PostUnaryOperator::Increment, Float(float)) =>
+					Float(*thread(float, |float| **float += 1.0) - 1.0),
+				(PostUnaryOperator::Decrement, Float(float)) =>
+					Float(*thread(float, |float| **float -= 1.0) + 1.0),
+				(PostUnaryOperator::Increment, Integer(integer)) =>
+					Integer(*thread(integer, |integer| **integer += 1) - 1),
+				(PostUnaryOperator::Decrement, Integer(integer)) =>
+					Integer(*thread(integer, |integer| **integer -= 1) + 1),
+				(_, value) => panic!("Invalid operation: {:?}, on value: {:?}", operator, value),
+			},
+			other => panic!("Cannot modify immutable value: {:?}", other),
 		},
-		Token::AngleRight => return match lexer.peek().node {
-			Token::AngleRight => lexer.thread(Ok(BinaryOperator::Value(ValueOperator::ShiftRight)))
-				.and_then(|operator| Ok(Expression::Binary(operator, Box::new(left),
-					Box::new(expression(context, lexer, precedence)?)))),
-			Token::GreaterEqual => lexer.thread(Ok(ValueOperator::ShiftRight))
-				.and_then(|operator| Ok(Expression::BinaryAssign(operator, Box::new(left),
-					Box::new(expression(context, lexer, precedence)?)))),
-			_ => Ok(Expression::Binary(BinaryOperator::GreaterThan, Box::new(left),
-				Box::new(expression(context, lexer, precedence)?)))
+		Expression::Binary(operator, left, right) => {
+			let left = concrete(context, left)?;
+			match (operator, &left) {
+				(BinaryOperator::LogicalOr, Boolean(true)) => return Ok(Boolean(true)),
+				(BinaryOperator::LogicalAnd, Boolean(false)) => return Ok(Boolean(false)),
+				_ => (),
+			}
+
+			// TODO: Implicit promotions
+			match (operator.clone(), left, concrete(context, right)?) {
+				(BinaryOperator::Equal, left, right) => Boolean(equal(left, right)),
+				(BinaryOperator::NotEqual, left, right) => Boolean(!equal(left, right)),
+				(BinaryOperator::LogicalOr, Boolean(left), Boolean(right)) => Boolean(left || right),
+				(BinaryOperator::LogicalAnd, Boolean(left), Boolean(right)) => Boolean(left && right),
+				(BinaryOperator::LessThan, Float(left), Float(right)) => Boolean(left < right),
+				(BinaryOperator::LessEqual, Float(left), Float(right)) => Boolean(left <= right),
+				(BinaryOperator::GreaterThan, Float(left), Float(right)) => Boolean(left > right),
+				(BinaryOperator::GreaterEqual, Float(left), Float(right)) => Boolean(left >= right),
+				(BinaryOperator::LessThan, Integer(left), Integer(right)) => Boolean(left < right),
+				(BinaryOperator::LessEqual, Integer(left), Integer(right)) => Boolean(left <= right),
+				(BinaryOperator::GreaterThan, Integer(left), Integer(right)) => Boolean(left > right),
+				(BinaryOperator::GreaterEqual, Integer(left), Integer(right)) => Boolean(left >= right),
+				(BinaryOperator::Value(operator), left, right) => value_operator(operator, left, right),
+				(operator, left, right) => panic!("Invalid operation: {:?}, on values: {:?}, and: {:?}",
+					operator, left, right),
+			}
+		}
+		Expression::BinaryAssign(operator, target, expression) =>
+			match evaluate(context, target)? {
+				Value::Reference(reference) => {
+					let expression = concrete(context, expression)?;
+					let target = context.dereference(&reference)?;
+					*target = value_operator(operator.clone(), target.clone(), expression);
+					target.clone()
+				}
+				other => panic!("Cannot modify immutable value: {:?}", other),
+			},
+		Expression::Ternary(condition, branch, default) =>
+			match concrete(context, condition)?.boolean() {
+				true => return evaluate(context, branch),
+				false => return evaluate(context, default),
+			},
+		Expression::Assign(target, expression) => match evaluate(context, target)? {
+			Value::Reference(reference) => {
+				let expression = concrete(context, expression)?;
+				let target = context.dereference(&reference)?;
+				*target = expression;
+				target.clone()
+			}
+			other => panic!("Cannot modify immutable value: {:?}", other),
 		},
-		_ => (),
-	}
-
-	let right = expression(context, lexer, precedence)?;
-	let operator = match binder {
-		Token::Asterisk => BinaryOperator::Value(ValueOperator::Multiply),
-		Token::Divide => BinaryOperator::Value(ValueOperator::Divide),
-		Token::Modulo => BinaryOperator::Value(ValueOperator::Modulo),
-		Token::Add => BinaryOperator::Value(ValueOperator::Add),
-		Token::Minus => BinaryOperator::Value(ValueOperator::Minus),
-		Token::AngleLeft => BinaryOperator::LessThan,
-		Token::LessEqual => BinaryOperator::LessEqual,
-		Token::GreaterEqual => BinaryOperator::GreaterEqual,
-		Token::Equal => BinaryOperator::Equal,
-		Token::NotEqual => BinaryOperator::NotEqual,
-		Token::Ampersand => BinaryOperator::Value(ValueOperator::And),
-		Token::LogicalAnd => BinaryOperator::LogicalAnd,
-		Token::LogicalOr => BinaryOperator::LogicalOr,
-		other => panic!("Invalid binder: {:?}", other),
-	};
-
-	Ok(Expression::Binary(operator, Box::new(left), Box::new(right)))
-}
-
-fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                -> ParserResult<Expression<'a>> {
-	if let Token::Identifier(_) = lexer.peek().node {
-		let recovery = lexer.clone();
-		let path = parser::path(lexer)?;
-		if let Some(variable) = context.resolve_variable(&path) {
-			return Ok(Expression::Variable(variable));
-		} else if let Some(function) = context.resolve_function(&path) {
-			let arguments = arguments(context, lexer)?;
-			return Ok(Expression::FunctionCall(function, arguments));
-		} else if context.resolve_structure(&path).is_some() {
-			*lexer = recovery;
-			let structure = parser::parse_type(lexer)?;
-			let arguments = arguments(context, lexer)?;
-			return Ok(Expression::Construction(structure, arguments));
-		} else {
-			return Err(Spanned::new(ParserError::UndefinedPath, lexer.next().span));
-		}
-	}
-
-	let token = lexer.next();
-	Ok(match token.node {
-		Token::Float(float) => Expression::Float(float),
-		Token::Integer(integer) => Expression::Integer(integer),
-		Token::Boolean(boolean) => Expression::Boolean(boolean),
-		Token::Character(character) => Expression::Character(character),
-		Token::String(string) => Expression::String(string),
-		Token::Asterisk => expression_root(context, lexer)
-			.map(Box::new).map(Expression::Dereference)?,
-		Token::Increment => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Increment, expression))?,
-		Token::Decrement => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Decrement, expression))?,
-		Token::Minus => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Minus, expression))?,
-		Token::Not => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Not, expression))?,
-		Token::BracketOpen => {
-			// TODO: Check for type cast
-			let expression = expression_root(context, lexer)?;
-			parser::expect(lexer, Token::BracketClose)?;
-			expression
-		}
-		Token::BraceOpen => {
-			let mut elements = Vec::new();
-			parser::list(lexer, Token::BraceClose, |lexer|
-				Ok(elements.push(expression_root(context, lexer)?)))?;
-			Expression::InitializerList(elements)
-		}
-		other => return Err(Spanned::new(match other {
-			Token::BracketClose => ParserError::UnmatchedBracket,
-			_ => ParserError::ExpectedTerminal,
-		}, token.span)),
+		Expression::Index(target, index) =>
+			match (concrete(context, target)?, concrete(context, index)?) {
+				(Array(array), Integer(index)) => array.get(index as usize).cloned(),
+				(Vector(vector), Integer(index)) => vector.get(index as usize).cloned(),
+				(target, index) => panic!("Cannot index into: {:?}, with: {:?}", target, index),
+			}.ok_or(ExecutionError::IndexBounds)?,
+		Expression::Field(expression, field) => match evaluate(context, expression)? {
+			Value::Reference(Reference(frame, path, fields)) => Value::Reference(Reference(frame,
+				path, thread(fields, |fields| fields.push(field.clone())))),
+			Value::Structure(mut structure) => structure.remove(field)
+				.unwrap_or_else(|| panic!("Field: {}, does not exist on structure")),
+			other => panic!("Cannot access field: {}, on value: {:?}", field, other),
+		},
+		// TODO: Implement function calls
+		Expression::FunctionCall(_, _) => unimplemented!(),
+		// TODO: Implement method calls
+		Expression::MethodCall(_, _, _) => unimplemented!(),
+		Expression::Dereference(_) => panic!("Cannot dereference value that is not a pointer"),
 	})
 }
 
-pub fn arguments<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                     -> ParserResult<Vec<Expression<'a>>> {
-	let mut arguments = Vec::new();
-	parser::expect(lexer, Token::BracketOpen)?;
-	parser::list(lexer, Token::BracketClose, |lexer|
-		Ok(arguments.push(expression_root(context, lexer)?)))
-		.map(|_| arguments)
+pub fn construct<'a>(context: &mut ExecutionContext<'a>, _: &Type<'a>,
+                     arguments: &[Expression<'a>]) -> ExecutionResult<Value<'a>> {
+	let mut arguments: Vec<_> = arguments.iter().map(|argument|
+		concrete(context, argument)).collect::<Result<_, _>>()?;
+	match arguments.len() {
+		1 => Ok(arguments.remove(0)),
+		// TODO: Implement custom constructors
+		_ => unimplemented!()
+	}
 }
 
-#[cfg(test)]
-mod tests {
-	use crate::node::{Identifier, Path};
+pub fn concrete<'a>(context: &mut ExecutionContext<'a>,
+                    expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
+	let value = evaluate(context, expression)?;
+	context.concrete(value)
+}
 
-	use super::*;
+fn thread<F, T>(mut value: T, function: F) -> T where F: FnOnce(&mut T) {
+	function(&mut value);
+	value
+}
 
-	#[test]
-	fn post_operator() {
-		let context = &context();
-		assert!(expression_root(context, &mut Lexer::new("variable++")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable--")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("function()")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("function(variable)")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable[variable]")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable[0][1]")).is_ok());
+fn equal(left: Value, right: Value) -> bool {
+	match (left, right) {
+		(Float(left), Float(right)) => left == right,
+		(Integer(left), Integer(right)) => left == right,
+		(Boolean(left), Boolean(right)) => left == right,
+		(Character(left), Character(right)) => left == right,
+		(String(left), String(right)) => left == right,
+		(left, right) => panic!("Cannot equate values: {:?}, and {:?}", left, right),
 	}
+}
 
-	#[test]
-	fn unary_operator() {
-		let context = &context();
-		assert!(expression_root(context, &mut Lexer::new("-variable")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("!variable")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("*variable")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("++variable")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("--variable")).is_ok());
-	}
-
-	#[test]
-	fn arithmetic() {
-		let context = &context();
-		assert!(expression_root(context, &mut Lexer::new("variable + 0")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("0.0 * 3.0 / 4.0")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("(1 + 2) % (3 - 4)")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable << (2 >> 1)")).is_ok());
-	}
-
-	#[test]
-	fn comparator() {
-		let context = &context();
-		assert!(expression_root(context, &mut Lexer::new("1 < 2")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("2 <= 2")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("3 >= 2")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("3 > 2")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("1 != 2")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("1 == 1")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("true && false")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("false || true")).is_ok());
-	}
-
-	#[test]
-	fn expression() {
-		let context = &context();
-		assert!(expression_root(context, &mut Lexer::new("false ? 0 + 1 : 1")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable -= 0 + 1")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable >>= 1")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable <<= 1")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("structure<int>(0)")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable.method()")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("variable->field")).is_ok());
-		assert!(expression_root(context, &mut Lexer::new("{0, {1, 2}}")).is_ok());
-	}
-
-	fn context() -> SymbolContext<'static> {
-		let mut context = SymbolContext::new();
-		context.variable(Path::single(Identifier("variable")));
-		context.functions.insert(Path::single(Identifier("function")));
-		context.structures.insert(Path::single(Identifier("structure")));
-		context
+fn value_operator<'a>(operator: ValueOperator, left: Value<'a>, right: Value<'a>) -> Value<'a> {
+	match (operator, left, right) {
+		(ValueOperator::Add, Float(left), Float(right)) => Float(left + right),
+		(ValueOperator::Minus, Float(left), Float(right)) => Float(left - right),
+		(ValueOperator::Multiply, Float(left), Float(right)) => Float(left * right),
+		(ValueOperator::Divide, Float(left), Float(right)) => Float(left / right),
+		(ValueOperator::Modulo, Float(left), Float(right)) => Float(left % right),
+		(ValueOperator::Add, Integer(left), Integer(right)) => Integer(left + right),
+		(ValueOperator::Minus, Integer(left), Integer(right)) => Integer(left - right),
+		(ValueOperator::Multiply, Integer(left), Integer(right)) => Integer(left * right),
+		(ValueOperator::Divide, Integer(left), Integer(right)) => Integer(left / right),
+		(ValueOperator::Modulo, Integer(left), Integer(right)) => Integer(left % right),
+		(ValueOperator::And, Integer(left), Integer(right)) => Integer(left & right),
+		(ValueOperator::Or, Integer(left), Integer(right)) => Integer(left | right),
+		(ValueOperator::ShiftLeft, Integer(left), Integer(right)) => Integer(left << right),
+		(ValueOperator::ShiftRight, Integer(left), Integer(right)) => Integer(left >> right),
+		(operator, left, right) => panic!("Invalid operation: {:?}, on values: {:?}, and: {:?}",
+			operator, left, right),
 	}
 }

@@ -14,7 +14,8 @@ impl<'a> SymbolContext<'a> {
 	/// Creates a symbol context with an initial frame.
 	pub fn new() -> Self {
 		let mut context = SymbolContext::default();
-		context.push().variable(Path::single(Identifier("nullptr")));
+		context.frames.push(SymbolFrame::default());
+		context.variable(Path::single(Identifier("nullptr")));
 		context
 	}
 
@@ -39,20 +40,11 @@ impl<'a> SymbolContext<'a> {
 			structure.prefix(inclusion.clone()))).find(|path| self.structures.contains(path))
 	}
 
-	pub fn scope<F, R>(&mut self, function: F) -> R
-		where F: FnOnce(&mut Self) -> R {
-		let result = function(self.push());
-		self.pop();
-		result
-	}
-
-	pub fn push(&mut self) -> &mut Self {
+	pub fn scope<F, R>(&mut self, function: F) -> R where F: FnOnce(&mut Self) -> R {
 		self.frames.push(SymbolFrame::default());
-		self
-	}
-
-	pub fn pop(&mut self) {
-		self.frames.pop().expect("Symbol context is empty");
+		let result = function(self);
+		self.frames.pop().unwrap();
+		result
 	}
 }
 

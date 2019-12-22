@@ -20,6 +20,12 @@ impl<'a> Path<'a> {
 		Path(vec![identifier])
 	}
 
+	pub fn push(mut self, identifier: Identifier<'a>) -> Self {
+		let Path(elements) = &mut self;
+		elements.push(identifier);
+		self
+	}
+
 	pub fn prefix(&self, identifier: Identifier<'a>) -> Self {
 		let Path(mut elements) = self.clone();
 		elements.insert(0, identifier);
@@ -37,12 +43,18 @@ impl<'a> fmt::Display for Path<'a> {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Type<'a> {
 	Concrete(Path<'a>, Vec<Type<'a>>),
 	Reference(Box<Type<'a>>),
 	Pointer(Box<Type<'a>>),
 	Constant(Box<Type<'a>>),
+}
+
+impl<'a> Type<'a> {
+	pub fn void() -> Type<'static> {
+		Type::Concrete(Path::single(Identifier("void")), Vec::new())
+	}
 }
 
 impl<'a> fmt::Display for Type<'a> {
@@ -84,7 +96,7 @@ pub struct Function<'a> {
 #[derive(Debug)]
 pub enum Statement<'a> {
 	Variable(Type<'a>, Vec<(Identifier<'a>, Option<Vec<Expression<'a>>>)>),
-	Conditional((Expression<'a>, Box<Statement<'a>>), Option<Box<Statement<'a>>>),
+	Conditional(Expression<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
 	ForLoop((Box<Statement<'a>>, Expression<'a>, Box<Statement<'a>>), Box<Statement<'a>>),
 	ForRange((Type<'a>, Identifier<'a>, Expression<'a>), Box<Statement<'a>>),
 	DoWhile(Box<Statement<'a>>, Expression<'a>),
@@ -92,13 +104,14 @@ pub enum Statement<'a> {
 	Return(Option<Expression<'a>>),
 	Expression(Expression<'a>),
 	Scope(Vec<Statement<'a>>),
+	Break,
 	Empty,
 }
 
 impl<'a> Statement<'a> {
 	pub fn terminated(&self) -> bool {
 		match self {
-			Statement::Conditional(_, _) => false,
+			Statement::Conditional(_, _, _) => false,
 			Statement::ForLoop(_, _) => false,
 			Statement::ForRange(_, _) => false,
 			Statement::While(_, _) => false,
@@ -145,17 +158,17 @@ pub enum PostUnaryOperator {
 	Decrement,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOperator {
 	Value(ValueOperator),
 	LessThan,
-	GreaterThan,
 	LessEqual,
+	GreaterThan,
 	GreaterEqual,
 	Equal,
 	NotEqual,
-	LogicalAnd,
 	LogicalOr,
+	LogicalAnd,
 }
 
 #[derive(Debug, Clone, PartialEq)]

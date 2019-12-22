@@ -1,9 +1,9 @@
+use crate::expression;
 use crate::lexer::{Lexer, Token};
 use crate::node::{Expression, Path, Statement};
 use crate::parser::{self, ParserError, ParserResult};
 use crate::span::Spanned;
 use crate::symbol::SymbolContext;
-use crate::value;
 
 pub fn scope<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
                  -> ParserResult<Vec<Statement<'a>>> {
@@ -36,22 +36,23 @@ fn statement_head<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 			let statement = Box::new(statement(context, lexer.skip())?);
 			parser::expect(lexer, Token::Identifier("while"))?;
 			parser::expect(lexer, Token::BracketOpen)?;
-			let expression = value::expression_root(context, lexer)?;
+			let expression = expression::expression_root(context, lexer)?;
 			parser::expect(lexer, Token::BracketClose)?;
 			Ok(Statement::DoWhile(statement, expression))
 		}
 		Token::Identifier("while") => {
 			parser::expect(lexer.skip(), Token::BracketOpen)?;
-			let expression = value::expression_root(context, lexer)?;
+			let expression = expression::expression_root(context, lexer)?;
 			parser::expect(lexer, Token::BracketClose)?;
 			let statement = Box::new(statement(context, lexer)?);
 			Ok(Statement::While(expression, statement))
 		}
 		Token::Identifier("return") => match lexer.peek().node {
 			Token::Terminator => Ok(Statement::Return(None)),
-			_ => value::expression_root(context, lexer.skip())
+			_ => expression::expression_root(context, lexer.skip())
 				.map(Some).map(Statement::Return)
 		}
+		Token::Identifier("break") => lexer.thread(Ok(Statement::Break)),
 		Token::Identifier(_) => lexer.recover(|lexer| identifier(context, lexer))
 			.or_else(|_| expression(context, lexer)),
 		_ => expression(context, lexer),
@@ -60,7 +61,7 @@ fn statement_head<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 
 fn expression<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
                   -> ParserResult<Statement<'a>> {
-	lexer.recover(|lexer| value::expression_root(context, lexer))
+	lexer.recover(|lexer| expression::expression_root(context, lexer))
 		.map(Statement::Expression).map_err(|_| ParserError::ExpectedStatement)
 		.map_err(|error| Spanned::new(error, lexer.peek().span))
 }
@@ -73,8 +74,8 @@ fn identifier<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		let identifier = parser::identifier(lexer)?.node;
 		context.variable(Path::single(identifier.clone()));
 		Ok(variables.push((identifier, match lexer.peek().node {
-			Token::BracketOpen => Some(value::arguments(context, lexer)?),
-			Token::Assign => value::expression_root(context, lexer.skip())
+			Token::BracketOpen => Some(expression::arguments(context, lexer)?),
+			Token::Assign => expression::expression_root(context, lexer.skip())
 				.map(|expression| Some(vec![expression]))?,
 			_ => None,
 		})))
@@ -85,26 +86,26 @@ fn conditional<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
                    -> ParserResult<Statement<'a>> {
 	parser::expect(lexer, Token::Identifier("if"))?;
 	parser::expect(lexer, Token::BracketOpen)?;
-	let expression = value::expression_root(context, lexer)?;
+	let expression = expression::expression_root(context, lexer)?;
 	parser::expect(lexer, Token::BracketClose)?;
 	let branch = Box::new(statement(context, lexer)?);
 
 	let mut default = None;
 	lexer.test(Token::Identifier("else"), |lexer|
 		Ok(default = Some(Box::new(statement(context, lexer)?))))?;
-	Ok(Statement::Conditional((expression, branch), default))
+	Ok(Statement::Conditional(expression, branch, default))
 }
 
 fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
                      -> ParserResult<Statement<'a>> {
 	parser::expect(lexer, Token::Identifier("for"))?;
 	parser::expect(lexer, Token::BracketOpen)?;
-	lexer.recover(|lexer| -> ParserResult<_> {
+	context.scope(|context| lexer.recover(|lexer| -> ParserResult<_> {
 		let structure = parser::parse_type(lexer)?;
 		let identifier = parser::identifier(lexer)?.node;
 		parser::expect(lexer, Token::Separator)?;
 
-		let expression = value::expression_root(context, lexer)?;
+		let expression = expression::expression_root(context, lexer)?;
 		parser::expect(lexer, Token::BracketClose)?;
 		Ok((structure, identifier, expression))
 	}).map(|header| context.scope(|context| {
@@ -116,7 +117,7 @@ fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		let initializer = statement(context, lexer)?;
 		let condition = match lexer.peek().node {
 			Token::Terminator => Ok(Expression::Boolean(true)),
-			_ => value::expression_root(context, lexer),
+			_ => expression::expression_root(context, lexer),
 		}?;
 
 		parser::expect(lexer, Token::Terminator)?;
@@ -129,7 +130,7 @@ fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		let statement = statement(context, lexer)?;
 		let header = (Box::new(initializer), condition, Box::new(iteration));
 		Ok(Statement::ForLoop(header, Box::new(statement)))
-	})
+	}))
 }
 
 #[cfg(test)]
@@ -142,6 +143,7 @@ mod tests {
 	fn test_statement() {
 		let context = &mut context();
 		assert!(statement(context, &mut Lexer::new("int a, b = 0, c(0);")).is_ok());
+		assert!(statement(context, &mut Lexer::new("if (variable) break;")).is_ok());
 		assert!(statement(context, &mut Lexer::new("if (true); else if (false); else;")).is_ok());
 		assert!(statement(context, &mut Lexer::new("for (const auto i : variable);")).is_ok());
 		assert!(statement(context, &mut Lexer::new("for (int i = 0; i < 10; ++i);")).is_ok());

@@ -100,11 +100,11 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 }
 
 pub fn path<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Path<'a>> {
-	let mut elements = vec![identifier(lexer)?.node];
+	let mut path = Path::single(identifier(lexer)?.node);
 	while lexer.peek().node == Token::PathSeparator {
-		elements.push(identifier(lexer.skip())?.node);
+		path = path.push(identifier(lexer.skip())?.node);
 	}
-	Ok(Path(elements))
+	Ok(path)
 }
 
 pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Type<'a>> {
