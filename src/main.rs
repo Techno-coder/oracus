@@ -4,9 +4,9 @@ fn main() {
 	let text = r#"
 using namespace std;
 
-int modify(int& x) {
+int& modify(int& x) {
 	x += 5;
-	return x + 10;
+	return x;
 }
 
 int main() {
@@ -19,7 +19,8 @@ int main() {
 	}
 
 	while (i < 10) i++;
-	auto value = modify(i);
+	auto& value = modify(i);
+	value += 3;
 	return i;
 }
 	"#;

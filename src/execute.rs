@@ -20,13 +20,13 @@ pub struct FrameIndex(pub usize);
 pub struct Reference<'a>(pub FrameIndex, pub Path<'a>, pub Vec<Field<'a>>);
 
 #[derive(Debug, Default)]
-pub struct ExecutionContext<'a> {
-	pub frames: HashMap<FrameIndex, ExecutionFrame<'a>>,
+pub struct ExecutionContext<'a, 'b> {
+	pub frames: HashMap<FrameIndex, ExecutionFrame<'a, 'b>>,
 	pub stack: Vec<FrameIndex>,
 	pub next_frame: usize,
 }
 
-impl<'a> ExecutionContext<'a> {
+impl<'a, 'b> ExecutionContext<'a, 'b> {
 	pub fn variable(&self, path: &Path<'a>) -> (FrameIndex, &Value<'a>) {
 		self.stack.iter().rev().find_map(|frame| self.frames[frame].variables
 			.get(path).map(|value| (frame.clone(), value))).unwrap_or_else(||
@@ -53,26 +53,44 @@ impl<'a> ExecutionContext<'a> {
 	}
 
 	pub fn insert(&mut self, path: Path<'a>, value: Value<'a>) {
-		let frame = self.stack.last().expect("Execution context stack is empty");
-		self.frames.get_mut(frame).unwrap().variables.insert(path, value);
+		self.frame().variables.insert(path, value);
 	}
 
 	pub fn scope<F, R>(&mut self, function: F) -> R where F: FnOnce(&mut Self) -> R {
+		let node_function = self.frame().function;
+		self.function(node_function, function)
+	}
+
+	pub fn function<F, R>(&mut self, node_function: &'b Function<'a>, function: F) -> R
+		where F: FnOnce(&mut Self) -> R {
 		let frame = FrameIndex(self.next_frame);
 		self.stack.push(frame.clone());
 		self.next_frame += 1;
 
-		self.frames.insert(frame.clone(), ExecutionFrame::default());
+		self.frames.insert(frame.clone(),
+			ExecutionFrame::new(node_function));
 		let result = function(self);
 		self.frames.remove(&frame);
 		self.stack.pop();
 		result
 	}
+
+	pub fn frame(&mut self) -> &mut ExecutionFrame<'a, 'b> {
+		let frame = self.stack.last().expect("Execution context stack is empty");
+		self.frames.get_mut(frame).unwrap()
+	}
 }
 
-#[derive(Debug, Default)]
-pub struct ExecutionFrame<'a> {
+#[derive(Debug)]
+pub struct ExecutionFrame<'a, 'b> {
 	pub variables: HashMap<Path<'a>, Value<'a>>,
+	pub function: &'b Function<'a>,
+}
+
+impl<'a, 'b> ExecutionFrame<'a, 'b> {
+	pub fn new(function: &'b Function<'a>) -> Self {
+		ExecutionFrame { variables: HashMap::new(), function }
+	}
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,9 +119,9 @@ macro_rules! resume {
     }
 }
 
-pub fn function<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-                    function: &Function<'a>, arguments: Vec<Value<'a>>) -> ExecutionResult<Value<'a>> {
-	context.scope(|context| {
+pub fn function<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                        function: &'b Function<'a>, arguments: Vec<Value<'a>>) -> ExecutionResult<Value<'a>> {
+	context.function(function, |context| {
 		Iterator::zip(function.parameters.iter().map(|(identifier, _)| identifier.clone()),
 			arguments.into_iter()).for_each(|(identifier, value)|
 			context.insert(Path::single(identifier), value));
@@ -116,8 +134,8 @@ pub fn function<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext
 	})
 }
 
-pub fn execute<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-                   statement: &Statement<'a>) -> ExecutionResult<Execution<'a>> {
+pub fn execute<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                       statement: &Statement<'a>) -> ExecutionResult<Execution<'a>> {
 	match statement {
 		Statement::Variable(structure, variables) =>
 			variables.iter().try_for_each(|(identifier, arguments)| {
@@ -160,16 +178,17 @@ pub fn execute<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<
 		Statement::Expression(expression) => value::evaluate(program,
 			context, expression).map(|_| Execution::None),
 		Statement::Scope(statements) => scope(program, context, statements),
-		Statement::Return(expression) => expression.as_ref().map(|expression|
-			value::concrete(program, context, expression).map(Execution::Return))
-			.unwrap_or(Ok(Execution::Return(Value::Void))),
+		Statement::Return(expression) => expression.as_ref().map(|expression| {
+			let return_type = &context.frame().function.return_type;
+			value::parameter(program, context, return_type, expression)
+		}.map(Execution::Return)).unwrap_or(Ok(Execution::Return(Value::Void))),
 		Statement::Break => Ok(Execution::Break),
 		Statement::Empty => Ok(Execution::None)
 	}
 }
 
-fn scope<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-             statements: &[Statement<'a>]) -> ExecutionResult<Execution<'a>> {
+fn scope<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                 statements: &[Statement<'a>]) -> ExecutionResult<Execution<'a>> {
 	context.scope(|context| statements.iter().map(|statement| execute(program, context, statement))
 		.find(|result| result.as_ref().map(|execution| execution != &Execution::None)
 			.unwrap_or(true)).unwrap_or(Ok(Execution::None)))

@@ -31,8 +31,9 @@ impl<'a> Value<'a> {
 	}
 }
 
-pub fn evaluate<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-                    expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
+/// Evaluates an expression. Prefers to return a reference when possible.
+pub fn evaluate<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                        expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
 	Ok(match expression {
 		Expression::Float(float) => Float(*float),
 		Expression::Integer(integer) => Integer(*integer),
@@ -155,10 +156,8 @@ pub fn evaluate<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext
 				.find(|function| function.parameters.len() == arguments.len())).unwrap_or_else(||
 				panic!("No function: {}, exists with arity: {}", path, arguments.len()));
 			let arguments = Iterator::zip(function.parameters.iter(), arguments.iter())
-				.map(|((_, structure), argument)| match structure {
-					Type::Reference(_) => evaluate(program, context, argument),
-					_ => concrete(program, context, argument),
-				}).collect::<Result<_, _>>()?;
+				.map(|((_, structure), argument)| parameter(program, context, structure, argument))
+				.collect::<Result<_, _>>()?;
 			execute::function(program, context, function, arguments)?
 		}
 		// TODO: Implement method calls
@@ -167,10 +166,11 @@ pub fn evaluate<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext
 	})
 }
 
-pub fn construct<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-                     _: &Type<'a>, arguments: &[Expression<'a>]) -> ExecutionResult<Value<'a>> {
+/// Constructs a typed object from provided arguments.
+pub fn construct<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                         structure: &Type<'a>, arguments: &[Expression<'a>]) -> ExecutionResult<Value<'a>> {
 	let mut arguments: Vec<_> = arguments.iter().map(|argument|
-		concrete(program, context, argument)).collect::<Result<_, _>>()?;
+		parameter(program, context, structure, argument)).collect::<Result<_, _>>()?;
 	match arguments.len() {
 		1 => Ok(arguments.remove(0)),
 		// TODO: Implement custom constructors
@@ -178,10 +178,20 @@ pub fn construct<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContex
 	}
 }
 
-pub fn concrete<'a>(program: &ProgramContext<'a>, context: &mut ExecutionContext<'a>,
-                    expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
+/// Evaluates an expression and promotes any references to a concrete value.
+pub fn concrete<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                        expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
 	let value = evaluate(program, context, expression)?;
 	context.concrete(value)
+}
+
+/// Evaluates an expression and promotes any references depending on the type.
+pub fn parameter<'a, 'b>(program: &'b ProgramContext<'a>, context: &mut ExecutionContext<'a, 'b>,
+                         structure: &Type<'a>, expression: &Expression<'a>) -> ExecutionResult<Value<'a>> {
+	match structure {
+		Type::Reference(_) => evaluate(program, context, expression),
+		_ => concrete(program, context, expression),
+	}
 }
 
 fn thread<F, T>(mut value: T, function: F) -> T where F: FnOnce(&mut T) {
