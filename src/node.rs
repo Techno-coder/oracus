@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::execute::{ExecutionContext, ExecutionResult};
 use crate::span::Spanned;
+use crate::symbol::SymbolContext;
+use crate::value::Value;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Identifier<'a>(pub &'a str);
@@ -34,6 +37,12 @@ impl<'a> Path<'a> {
 	}
 }
 
+impl<'a, T> From<T> for Path<'a> where T: AsRef<[&'a str]> {
+	fn from(elements: T) -> Self {
+		Path(elements.as_ref().iter().cloned().map(Identifier).collect())
+	}
+}
+
 impl<'a> fmt::Display for Path<'a> {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		let Path(identifiers) = self;
@@ -53,8 +62,12 @@ pub enum Type<'a> {
 }
 
 impl<'a> Type<'a> {
+	pub fn single(path: Path<'a>) -> Self {
+		Type::Concrete(path, Vec::new())
+	}
+
 	pub fn void() -> Type<'static> {
-		Type::Concrete(Path::single(Identifier("void")), Vec::new())
+		Type::single(Path::single(Identifier("void")))
 	}
 }
 
@@ -79,8 +92,24 @@ impl<'a> fmt::Display for Type<'a> {
 }
 
 #[derive(Debug, Default)]
-pub struct ProgramContext<'a> {
-	pub functions: HashMap<Path<'a>, Vec<Function<'a>>>
+pub struct Program<'a> {
+	pub functions: HashMap<Path<'a>, Vec<Function<'a>>>,
+	pub intrinsics: Vec<Box<dyn Intrinsic>>,
+}
+
+pub trait Intrinsic: fmt::Debug {
+	fn register<'a>(&self, context: &mut SymbolContext<'a>);
+	fn variable<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
+	                    variable: &Path<'a>) -> ExecutionResult<Option<Value<'a>>>;
+	fn operation<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
+	                     operator: BinaryOperator, left: &Value<'a>, right: &Value<'a>)
+	                     -> ExecutionResult<Option<Value<'a>>>;
+	fn function<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
+	                    function: &Path<'a>, arguments: &[Value<'a>])
+	                    -> ExecutionResult<Option<Value<'a>>>;
+	fn method<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
+	                  target: &Value<'a>, method: &Identifier<'a>, arguments: &[Value<'a>])
+	                  -> ExecutionResult<Option<Value<'a>>>;
 }
 
 #[derive(Debug)]

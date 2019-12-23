@@ -5,3 +5,4 @@ authors = ["Technocoder <8334328+Techno-coder@users.noreply.github.com>"]
 edition = "2018"
 
 [dependencies]
+text_io = "^0.1"

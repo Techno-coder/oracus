@@ -245,9 +245,9 @@ mod tests {
 
 	fn context() -> SymbolContext<'static> {
 		let mut context = SymbolContext::new();
-		context.variable(Path::single(Identifier("variable")));
-		context.functions.insert(Path::single(Identifier("function")));
-		context.structures.insert(Path::single(Identifier("structure")));
+		context.variable(["variable"].into());
+		context.functions.insert(["function"].into());
+		context.structures.insert(["structure"].into());
 		context
 	}
 }

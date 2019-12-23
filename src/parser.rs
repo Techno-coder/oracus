@@ -1,5 +1,6 @@
+use crate::intrinsic;
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::node::{Function, Identifier, Path, ProgramContext, Root, Type};
+use crate::node::{Function, Identifier, Intrinsic, Path, Program, Root, Type};
 use crate::span::Spanned;
 use crate::symbol::SymbolContext;
 
@@ -19,15 +20,54 @@ pub enum ParserError {
 	UndefinedPath,
 }
 
-pub fn parse(string: &str) -> ParserResult<ProgramContext> {
+pub fn parse(string: &str) -> ParserResult<Program> {
 	let lexer = &mut Lexer::new(string);
 	let context = &mut SymbolContext::new();
-	let mut program = ProgramContext::default();
+	let mut program = Program::default();
 	while let Some(root) = root(context, lexer)? {
-		if let Root::Function(function) = root {
-			let path = Path::single(function.identifier.clone());
-			let entry = program.functions.entry(path);
-			entry.or_default().push(function);
+		match root {
+			Root::Function(function) => {
+				let path = Path::single(function.identifier.clone());
+				let entry = program.functions.entry(path);
+				entry.or_default().push(function);
+			}
+			Root::Include(header) => match header.node {
+				Identifier("iostream") => Some(Box::new(intrinsic::Stream::new())),
+				Identifier("algorithm") => {
+					context.functions.insert(Path(vec![Identifier("std"), Identifier("sort")]));
+					context.functions.insert(Path(vec![Identifier("std"), Identifier("swap")]));
+					None
+				}
+				Identifier("utility") => {
+					context.structures.insert(Path(vec![Identifier("std"), Identifier("pair")]));
+					None
+				}
+				Identifier("vector") => {
+					context.structures.insert(Path(vec![Identifier("std"), Identifier("vector")]));
+					None
+				}
+				Identifier("stack") => {
+					context.structures.insert(Path(vec![Identifier("std"), Identifier("stack")]));
+					None
+				}
+				Identifier("map") => {
+					context.structures.insert(Path(vec![Identifier("std"), Identifier("map")]));
+					None
+				}
+				Identifier("climits") => {
+					context.variable(Path::single(Identifier("INT_MAX")));
+					None
+				}
+				Identifier("cassert") => {
+					context.functions.insert(Path::single(Identifier("assert")));
+					None
+				}
+				_ => None,
+			}.into_iter().for_each(|intrinsic| {
+				intrinsic.register(context);
+				program.intrinsics.push(intrinsic);
+			}),
+			_ => (),
 		}
 	}
 	Ok(program)
@@ -42,40 +82,6 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 			expect(lexer, Token::AngleLeft)?;
 			let identifier = identifier(lexer)?;
 			expect(lexer, Token::AngleRight)?;
-
-			match identifier.node {
-				Identifier("iostream") => {
-					context.variable(Path(vec![Identifier("std"), Identifier("cin")]));
-					context.variable(Path(vec![Identifier("std"), Identifier("cout")]));
-					context.variable(Path(vec![Identifier("std"), Identifier("endl")]));
-					context.functions.insert(Path(vec![Identifier("std"),
-						Identifier("ios"), Identifier("sync_with_stdio")]));
-				}
-				Identifier("algorithm") => {
-					context.functions.insert(Path(vec![Identifier("std"), Identifier("sort")]));
-					context.functions.insert(Path(vec![Identifier("std"), Identifier("swap")]));
-				}
-				Identifier("utility") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("pair")]));
-				}
-				Identifier("vector") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("vector")]));
-				}
-				Identifier("stack") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("stack")]));
-				}
-				Identifier("map") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("map")]));
-				}
-				Identifier("climits") => {
-					context.variable(Path::single(Identifier("INT_MAX")));
-				}
-				Identifier("cassert") => {
-					context.functions.insert(Path::single(Identifier("assert")));
-				}
-				_ => (),
-			}
-
 			Root::Include(identifier)
 		}
 		Token::Identifier("using") => {
