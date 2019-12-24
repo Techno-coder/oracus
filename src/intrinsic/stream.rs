@@ -39,8 +39,8 @@ impl Intrinsic for Stream {
 		match operator {
 			BinaryOperator::Value(ValueOperator::ShiftRight) => {
 				if &left.node == &self.variables[&["std", "cin"].into()] {
-					let reference = &right.node.clone().reference();
-					let (value, structure) = context.dereference(reference, right.span)?;
+					let reference = right.node.clone().reference(right.span);
+					let (value, structure) = context.dereference(&reference)?;
 					if structure == &Type::single(["float"].into()) {
 						*value = Value::Float(read!());
 					} else if structure == &Type::single(["int"].into()) {
@@ -83,10 +83,9 @@ impl Intrinsic for Stream {
 	                    function: &S<Path<'a>>, _: &[S<Value<'a>>])
 	                    -> ExecutionResult<Option<Value<'a>>> {
 		if &function.node == &["std", "ios", "sync_with_stdio"].into() {
-			Ok(Some(Value::Void))
-		} else {
-			Ok(None)
+			return Ok(Some(Value::Void));
 		}
+		Ok(None)
 	}
 
 	fn method<'a, 'b>(&self, _: &'b Program<'a>, _: &mut ExecutionContext<'a, 'b>,

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::ops::{Index, IndexMut};
 
 use Value::*;
 
 use crate::execute::{self, ExecutionContext, ExecutionResult, Field, Reference};
-use crate::node::{BinaryOperator, Expression, PostUnaryOperator, Program,
+use crate::node::{BinaryOperator, Expression, Identifier, PostUnaryOperator, Program,
 	Type, UnaryOperator, ValueOperator};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
@@ -29,10 +30,17 @@ impl<'a> Value<'a> {
 		}
 	}
 
-	pub fn reference(self) -> Reference<'a> {
+	pub fn reference(self, span: Span) -> Spanned<Reference<'a>> {
 		match self {
-			Value::Reference(reference) => reference,
+			Value::Reference(reference) => Spanned::new(reference, span),
 			other => panic!("Cannot modify immutable value: {:?}", other),
+		}
+	}
+
+	pub fn structure(&mut self) -> &mut Structure<'a> {
+		match self {
+			Value::Structure(structure) => structure,
+			other => panic!("Value: {:?}, is not structure", other),
 		}
 	}
 }
@@ -46,6 +54,20 @@ pub struct Structure<'a> {
 impl<'a> Structure<'a> {
 	pub fn new(structure: Type<'a>) -> Self {
 		Self { structure, fields: HashMap::new() }
+	}
+}
+
+impl<'a> Index<&Identifier<'a>> for Structure<'a> {
+	type Output = (Value<'a>, Type<'a>);
+
+	fn index(&self, index: &Identifier<'a>) -> &Self::Output {
+		self.fields.get(index).unwrap_or_else(|| panic!("Field: {}, does not exist", index))
+	}
+}
+
+impl<'a> IndexMut<&Identifier<'a>> for Structure<'a> {
+	fn index_mut(&mut self, index: &Identifier<'a>) -> &mut Self::Output {
+		self.fields.get_mut(index).unwrap_or_else(|| panic!("Field: {}, does not exist", index))
 	}
 }
 
@@ -70,11 +92,12 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 		Expression::InitializerList(expressions) => expressions.iter().map(|expression|
 			concrete(program, context, expression)).collect::<Result<_, _>>().map(List)?,
 		Expression::Construction(structure, arguments) =>
-			construct(program, context, &structure.node, arguments)?,
+			construct(program, context, structure, arguments)?,
 		Expression::Unary(operator, expression) => {
 			let value = evaluate(program, context, expression)?;
 			if let Value::Reference(reference) = &value {
-				match (operator, context.dereference(reference, expression.span)?) {
+				let reference = Spanned::new(reference.clone(), expression.span);
+				match (operator, context.dereference(&reference)?) {
 					(UnaryOperator::Increment, (Float(float), _)) =>
 						return Ok(Float(*thread(float, |float| **float += 1.0))),
 					(UnaryOperator::Decrement, (Float(float), _)) =>
@@ -96,8 +119,8 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 			}
 		}
 		Expression::PostUnary(operator, expression) => {
-			let reference = evaluate(program, context, expression)?.reference();
-			match (operator, context.dereference(&reference, expression.span)?) {
+			let value = evaluate(program, context, expression)?;
+			match (operator, context.dereference(&value.reference(expression.span))?) {
 				(PostUnaryOperator::Increment, (Float(float), _)) =>
 					Float(*thread(float, |float| **float += 1.0) - 1.0),
 				(PostUnaryOperator::Decrement, (Float(float), _)) =>
@@ -143,9 +166,9 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 			}
 		}
 		Expression::BinaryAssign(operator, target, expression) => {
-			let reference = evaluate(program, context, target)?.reference();
+			let reference = evaluate(program, context, target)?.reference(target.span);
 			let expression = concrete(program, context, expression)?;
-			let (target, _) = context.dereference(&reference, target.span)?;
+			let (target, _) = context.dereference(&reference)?;
 			*target = value_operator(operator.clone(), target.clone(), expression);
 			target.clone()
 		}
@@ -155,10 +178,14 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 				false => evaluate(program, context, default),
 			}?,
 		Expression::Assign(target, expression) => {
-			let reference = evaluate(program, context, target)?.reference();
-			let expression = concrete(program, context, expression)?;
-			let (target, _) = context.dereference(&reference, target.span)?;
-			*target = expression;
+			let reference = evaluate(program, context, target)?.reference(target.span);
+			let expression = Spanned::new(concrete(program, context, expression)?, expression.span);
+			let value = program.intrinsics.iter().map(|intrinsic| intrinsic.assign(program,
+				context, &reference, &expression)).find_map(Result::transpose);
+			if let Some(value) = value { return value; }
+
+			let (target, _) = context.dereference(&reference)?;
+			*target = expression.node;
 			target.clone()
 		}
 		Expression::Index(target, _) =>
@@ -201,14 +228,17 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 
 /// Constructs a typed object from provided arguments.
 pub fn construct<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-                         structure: &Type<'a>, arguments: &[Spanned<Expression<'a>>])
+                         structure: &Spanned<Type<'a>>, arguments: &[Spanned<Expression<'a>>])
                          -> ExecutionResult<Value<'a>> {
 	let mut arguments: Vec<_> = arguments.iter().map(|argument|
 		parameter(program, context, structure, argument)).collect::<Result<_, _>>()?;
+	let value = program.intrinsics.iter().map(|intrinsic| intrinsic.construct(program,
+		context, structure, &arguments)).find_map(Result::transpose);
+	if let Some(value) = value { return value; }
 	match arguments.len() {
+		0 => Ok(Value::Uninitialised),
 		1 => Ok(arguments.remove(0)),
-		// TODO: Implement custom constructors
-		_ => unimplemented!()
+		_ => panic!("No valid construction for type: {}", structure.node),
 	}
 }
 
@@ -221,9 +251,9 @@ pub fn concrete<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 
 /// Evaluates an expression and promotes any references depending on the type.
 pub fn parameter<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-                         structure: &Type<'a>, expression: &Spanned<Expression<'a>>)
+                         structure: &Spanned<Type<'a>>, expression: &Spanned<Expression<'a>>)
                          -> ExecutionResult<Value<'a>> {
-	match structure {
+	match structure.node {
 		Type::Reference(_) => evaluate(program, context, expression),
 		_ => concrete(program, context, expression),
 	}

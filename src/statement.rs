@@ -48,9 +48,9 @@ fn statement_head<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 			let statement = Box::new(statement(context, lexer)?);
 			Ok(Statement::While(expression, statement))
 		}
-		Token::Identifier("return") => match lexer.peek().node {
+		Token::Identifier("return") => match lexer.skip().peek().node {
 			Token::Terminator => Ok(Statement::Return(None)),
-			_ => expression::expression_root(context, lexer.skip())
+			_ => expression::expression_root(context, lexer)
 				.map(Some).map(Statement::Return)
 		}
 		Token::Identifier("break") => lexer.thread(Ok(Statement::Break)),
@@ -76,10 +76,10 @@ fn identifier<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		let identifier = parser::identifier(lexer)?;
 		context.variable(Path::single(identifier.node.clone()));
 		Ok(variables.push((identifier, match lexer.peek().node {
-			Token::BracketOpen => Some(expression::arguments(context, lexer)?),
+			Token::BracketOpen => expression::arguments(context, lexer)?,
 			Token::Assign => expression::expression_root(context, lexer.skip())
-				.map(|expression| Some(vec![expression]))?,
-			_ => None,
+				.map(|expression| vec![expression])?,
+			_ => Vec::new(),
 		})))
 	}).map(|_| Statement::Variable(structure, variables))
 }
@@ -155,6 +155,7 @@ mod tests {
 		assert!(statement(context, &mut Lexer::new("while (true);")).is_ok());
 		assert!(statement(context, &mut Lexer::new("do; while (true);")).is_ok());
 		assert!(statement(context, &mut Lexer::new("{{} { int a = 0; } {}}")).is_ok());
+		assert!(statement(context, &mut Lexer::new("{ return variable; return; }")).is_ok());
 	}
 
 	fn context() -> SymbolContext<'static> {

@@ -32,16 +32,13 @@ pub fn parse(string: &str) -> ParserResult<Program> {
 				entry.or_default().push(function);
 			}
 			Root::Include(header) => match header.node {
-				Identifier("iostream") => Some(Box::new(intrinsic::Stream::new())),
+				Identifier("iostream") => Some(Box::new(intrinsic::Stream::new()) as Box<_>),
 				Identifier("algorithm") => {
 					context.functions.insert(Path(vec![Identifier("std"), Identifier("sort")]));
 					context.functions.insert(Path(vec![Identifier("std"), Identifier("swap")]));
 					None
 				}
-				Identifier("utility") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("pair")]));
-					None
-				}
+				Identifier("utility") => Some(Box::new(intrinsic::Utility) as Box<_>),
 				Identifier("vector") => {
 					context.structures.insert(Path(vec![Identifier("std"), Identifier("vector")]));
 					None
@@ -63,7 +60,7 @@ pub fn parse(string: &str) -> ParserResult<Program> {
 					None
 				}
 				_ => None,
-			}.into_iter().for_each(|intrinsic| {
+			}.into_iter().for_each(|intrinsic: Box<dyn Intrinsic>| {
 				intrinsic.register(context);
 				program.intrinsics.push(intrinsic);
 			}),
@@ -126,6 +123,7 @@ pub fn path<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Path<'a>>> {
 	Ok(path)
 }
 
+// TODO: Parse types based on symbol context
 pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Type<'a>>> {
 	let token = lexer.peek();
 	match token.node {

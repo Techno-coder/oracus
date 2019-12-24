@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::node::{Function, Identifier, Path, Program, Statement, Type};
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 use crate::value::{self, Value};
 
 pub type ExecutionResult<T> = Result<T, Spanned<ExecutionError>>;
@@ -36,19 +36,21 @@ impl<'a, 'b> ExecutionContext<'a, 'b> {
 
 	pub fn concrete(&mut self, value: Spanned<Value<'a>>) -> ExecutionResult<Value<'a>> {
 		match value.node {
-			Value::Reference(reference) => self.dereference(&reference,
-				value.span).map(|(value, _)| value.clone()),
+			Value::Reference(reference) => {
+				let reference = Spanned::new(reference, value.span);
+				self.dereference(&reference).map(|(value, _)| value.clone())
+			}
 			other => return Ok(other),
 		}
 	}
 
-	pub fn dereference(&mut self, reference: &Reference<'a>, span: Span)
+	pub fn dereference(&mut self, reference: &Spanned<Reference<'a>>)
 	                   -> ExecutionResult<(&mut Value<'a>, &Type<'a>)> {
-		let Reference(frame, path, fields) = reference;
+		let Reference(frame, path, fields) = &reference.node;
 		let (variable, structure) = self.frames.get_mut(frame)
 			.and_then(|frame| frame.variables.get_mut(path))
 			.map(|(variable, structure)| (variable, &*structure))
-			.ok_or(Spanned::new(ExecutionError::InvalidReference, span))?;
+			.ok_or(Spanned::new(ExecutionError::InvalidReference, reference.span))?;
 		Ok(fields.iter().fold((variable, structure), |(variable, _), field| match variable {
 			Value::Structure(structure) => structure.fields.get_mut(field)
 				.map(|(value, structure)| (value, &*structure)).unwrap_or_else(||
@@ -146,9 +148,9 @@ pub fn execute<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<
 	match &statement.node {
 		Statement::Variable(structure, variables) =>
 			variables.iter().try_for_each(|(identifier, arguments)| {
-				let value = arguments.as_ref().map(|arguments| value::construct(program,
-					context, &structure.node, arguments)).unwrap_or(Ok(Value::Uninitialised))?;
-				Ok(context.insert(Path::single(identifier.node.clone()), value, structure.node.clone()))
+				let path = Path::single(identifier.node.clone());
+				let value = value::construct(program, context, structure, arguments)?;
+				Ok(context.insert(path, value, structure.node.clone()))
 			}).map(|_| Execution::None),
 		Statement::Conditional(condition, branch, default) =>
 			match value::concrete(program, context, condition)?.boolean() {
@@ -186,7 +188,7 @@ pub fn execute<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<
 			context, expression).map(|_| Execution::None),
 		Statement::Scope(statements) => scope(program, context, statements),
 		Statement::Return(expression) => expression.as_ref().map(|expression| {
-			let return_type = &context.frame().function.return_type.node;
+			let return_type = &context.frame().function.return_type;
 			value::parameter(program, context, return_type, expression)
 		}.map(Execution::Return)).unwrap_or(Ok(Execution::Return(Value::Void))),
 		Statement::Break => Ok(Execution::Break),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::execute::{ExecutionContext, ExecutionResult};
+use crate::execute::{ExecutionContext, ExecutionResult, Reference};
 use crate::span::S;
 use crate::symbol::SymbolContext;
 use crate::value::Value;
@@ -99,17 +99,23 @@ pub struct Program<'a> {
 
 pub trait Intrinsic: fmt::Debug {
 	fn register<'a>(&self, context: &mut SymbolContext<'a>);
-	fn variable<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                    variable: &S<Path<'a>>) -> ExecutionResult<Option<Value<'a>>>;
-	fn operation<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                     operator: BinaryOperator, left: &S<Value<'a>>, right: &S<Value<'a>>)
-	                     -> ExecutionResult<Option<Value<'a>>>;
-	fn function<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                    function: &S<Path<'a>>, arguments: &[S<Value<'a>>])
-	                    -> ExecutionResult<Option<Value<'a>>>;
-	fn method<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                  target: &S<Value<'a>>, method: &S<Identifier<'a>>, arguments: &[S<Value<'a>>])
-	                  -> ExecutionResult<Option<Value<'a>>>;
+	fn variable<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                    _variable: &S<Path<'a>>) -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	fn operation<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                     _operator: BinaryOperator, _left: &S<Value<'a>>, _right: &S<Value<'a>>)
+	                     -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	fn function<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                    _function: &S<Path<'a>>, _arguments: &[S<Value<'a>>])
+	                    -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	fn method<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                  _target: &S<Value<'a>>, _method: &S<Identifier<'a>>, _arguments: &[S<Value<'a>>])
+	                  -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	fn assign<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                  _target: &S<Reference<'a>>, _value: &S<Value<'a>>)
+	                  -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	fn construct<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
+	                     _structure: &S<Type<'a>>, _arguments: &[Value<'a>])
+	                     -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
 }
 
 #[derive(Debug)]
@@ -129,7 +135,7 @@ pub struct Function<'a> {
 
 #[derive(Debug)]
 pub enum Statement<'a> {
-	Variable(S<Type<'a>>, Vec<(S<Identifier<'a>>, Option<Vec<S<Expression<'a>>>>)>),
+	Variable(S<Type<'a>>, Vec<(S<Identifier<'a>>, Vec<S<Expression<'a>>>)>),
 	Conditional(S<Expression<'a>>, Box<S<Statement<'a>>>, Option<Box<S<Statement<'a>>>>),
 	ForLoop((Box<S<Statement<'a>>>, S<Expression<'a>>, Box<S<Statement<'a>>>), Box<S<Statement<'a>>>),
 	ForRange((S<Type<'a>>, S<Identifier<'a>>, S<Expression<'a>>), Box<S<Statement<'a>>>),

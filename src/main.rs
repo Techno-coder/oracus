@@ -5,6 +5,7 @@ use oracus::node::{Identifier, Path};
 fn main() {
 	let text = r#"
 #include <iostream>
+#include <utility>
 
 using namespace std;
 
@@ -13,15 +14,9 @@ int& modify(int& x) {
 	return x;
 }
 
-int& bad() {
-	int i = 0;
-	return i;
-}
-
 int main() {
 	cin.tie(0);
 	ios::sync_with_stdio(false);
-	cout << bad() << endl;
 
 	int i = 0;
 	for (; i < 10; ++i) {
@@ -34,6 +29,11 @@ int main() {
 	while (i < 10) i++;
 	auto& value = modify(i);
 	value += 3;
+
+	std::pair<int, bool> p;
+	p = {i, false};
+	p.first += 3;
+	cout << p.first << endl;
 	return i;
 }
 	"#;
