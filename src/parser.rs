@@ -1,7 +1,7 @@
 use crate::intrinsic;
 use crate::lexer::{Lexer, LexerError, Token};
 use crate::node::{Function, Identifier, Intrinsic, Path, Program, Root, Type};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 use crate::symbol::SymbolContext;
 
 pub type ParserResult<T> = Result<T, Spanned<ParserError>>;
@@ -101,8 +101,8 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 				expect(lexer, Token::BracketOpen)?;
 				list(lexer, Token::BracketClose, |lexer| {
 					let parameter_type = parse_type(lexer)?;
-					let identifier = self::identifier(lexer)?.node;
-					context.variable(Path::single(identifier.clone()));
+					let identifier = self::identifier(lexer)?;
+					context.variable(Path::single(identifier.node.clone()));
 					Ok(parameters.push((identifier, parameter_type)))
 				})?;
 
@@ -116,21 +116,24 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 	}))
 }
 
-pub fn path<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Path<'a>> {
-	let mut path = Path::single(identifier(lexer)?.node);
+pub fn path<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Path<'a>>> {
+	let mut path = identifier(lexer)?.map(Path::single);
 	while lexer.peek().node == Token::PathSeparator {
-		path = path.push(identifier(lexer.skip())?.node);
+		let identifier = identifier(lexer.skip())?;
+		path.node = path.node.push(identifier.node);
+		path.span = path.span.extend(identifier.span);
 	}
 	Ok(path)
 }
 
-pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Type<'a>> {
+pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Type<'a>>> {
 	let token = lexer.peek();
 	match token.node {
-		Token::Identifier("const") =>
-			Ok(Type::Constant(Box::new(parse_type(lexer.skip())?))),
+		Token::Identifier("const") => Ok(parse_type(lexer.skip())?
+			.map(|structure| Type::Constant(Box::new(structure)))),
 		Token::Identifier(_) => {
-			let Path(mut elements) = path(lexer)?;
+			let mut path = path(lexer)?;
+			let Path(elements) = &mut path.node;
 			if elements.len() == 1 {
 				let Identifier(identifier) = &mut elements[0];
 				integer_type(lexer, identifier)?;
@@ -138,13 +141,15 @@ pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Type<'a>> {
 
 			let mut templates = Vec::new();
 			lexer.test(Token::AngleLeft, |lexer| list(lexer, Token::AngleRight,
-				|lexer| Ok(templates.push(parse_type(lexer)?))))?;
+				|lexer| Ok(templates.push(parse_type(lexer)?.node))).map(|_| ()))?;
 
-			let mut concrete = Type::Concrete(Path(elements), templates);
+			let mut concrete = path.map(|path| Type::Concrete(path, templates));
 			loop {
 				concrete = match lexer.peek().node {
-					Token::Asterisk => lexer.thread(Type::Pointer(Box::new(concrete))),
-					Token::Ampersand => lexer.thread(Type::Reference(Box::new(concrete))),
+					Token::Asterisk => concrete.map(|concrete|
+						lexer.thread(Type::Pointer(Box::new(concrete)))),
+					Token::Ampersand => concrete.map(|concrete|
+						lexer.thread(Type::Reference(Box::new(concrete)))),
 					_ => break Ok(concrete),
 				};
 			}
@@ -180,7 +185,7 @@ fn integer_type(lexer: &mut Lexer, identifier: &mut &str) -> ParserResult<()> {
 }
 
 pub fn list<'a, F>(lexer: &mut Lexer<'a>, close: Token<'static>, function: F)
-                   -> ParserResult<()> where F: FnMut(&mut Lexer<'a>) -> ParserResult<()> {
+                   -> ParserResult<Span> where F: FnMut(&mut Lexer<'a>) -> ParserResult<()> {
 	list_head(lexer, &close, function)?;
 	expect(lexer, close)
 }
@@ -196,11 +201,11 @@ pub fn list_head<'a, F>(lexer: &mut Lexer<'a>, close: &Token<'static>, mut funct
 	})
 }
 
-pub fn expect(lexer: &mut Lexer, target: Token<'static>) -> ParserResult<()> {
+pub fn expect(lexer: &mut Lexer, target: Token<'static>) -> ParserResult<Span> {
 	let token = lexer.next();
 	match token.node == target {
 		false => Err(Spanned::new(ParserError::Expected(target), token.span)),
-		true => Ok(())
+		true => Ok(token.span)
 	}
 }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::execute::{ExecutionContext, ExecutionResult};
 use crate::node::{BinaryOperator, Identifier, Intrinsic, Path, Program, Type, ValueOperator};
+use crate::span::S;
 use crate::symbol::SymbolContext;
 use crate::value::Value;
 
@@ -28,18 +29,18 @@ impl Intrinsic for Stream {
 	}
 
 	fn variable<'a, 'b>(&self, _: &'b Program<'a>, _: &mut ExecutionContext<'a, 'b>,
-	                    variable: &Path<'a>) -> ExecutionResult<Option<Value<'a>>> {
-		Ok(self.variables.get(variable).cloned())
+	                    variable: &S<Path<'a>>) -> ExecutionResult<Option<Value<'a>>> {
+		Ok(self.variables.get(&variable.node).cloned())
 	}
 
 	fn operation<'a, 'b>(&self, _: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                     operator: BinaryOperator, left: &Value<'a>, right: &Value<'a>)
+	                     operator: BinaryOperator, left: &S<Value<'a>>, right: &S<Value<'a>>)
 	                     -> ExecutionResult<Option<Value<'a>>> {
 		match operator {
 			BinaryOperator::Value(ValueOperator::ShiftRight) => {
-				if left == &self.variables[&["std", "cin"].into()] {
-					let reference = &right.clone().reference();
-					let (value, structure) = context.dereference(reference)?;
+				if &left.node == &self.variables[&["std", "cin"].into()] {
+					let reference = &right.node.clone().reference();
+					let (value, structure) = context.dereference(reference, right.span)?;
 					if structure == &Type::single(["float"].into()) {
 						*value = Value::Float(read!());
 					} else if structure == &Type::single(["int"].into()) {
@@ -54,11 +55,11 @@ impl Intrinsic for Stream {
 					} else {
 						panic!("Cannot read into value: {:?}", value);
 					}
-					return Ok(Some(left.clone()));
+					return Ok(Some(left.node.clone()));
 				}
 			}
 			BinaryOperator::Value(ValueOperator::ShiftLeft) => {
-				if left == &self.variables[&["std", "cout"].into()] {
+				if &left.node == &self.variables[&["std", "cout"].into()] {
 					match &context.concrete(right.clone())? {
 						Value::Float(float) => print!("{}", float),
 						Value::Integer(integer) => print!("{}", integer),
@@ -70,7 +71,7 @@ impl Intrinsic for Stream {
 							Type::single(["std", "endl"].into()) => println!(),
 						other => panic!("Cannot display value: {:?}", other),
 					}
-					return Ok(Some(left.clone()));
+					return Ok(Some(left.node.clone()));
 				}
 			}
 			_ => (),
@@ -79,8 +80,9 @@ impl Intrinsic for Stream {
 	}
 
 	fn function<'a, 'b>(&self, _: &'b Program<'a>, _: &mut ExecutionContext<'a, 'b>,
-	                    function: &Path<'a>, _: &[Value<'a>]) -> ExecutionResult<Option<Value<'a>>> {
-		if function == &["std", "ios", "sync_with_stdio"].into() {
+	                    function: &S<Path<'a>>, _: &[S<Value<'a>>])
+	                    -> ExecutionResult<Option<Value<'a>>> {
+		if &function.node == &["std", "ios", "sync_with_stdio"].into() {
 			Ok(Some(Value::Void))
 		} else {
 			Ok(None)
@@ -88,10 +90,10 @@ impl Intrinsic for Stream {
 	}
 
 	fn method<'a, 'b>(&self, _: &'b Program<'a>, _: &mut ExecutionContext<'a, 'b>,
-	                  target: &Value<'a>, method: &Identifier<'a>, _: &[Value<'a>])
+	                  target: &S<Value<'a>>, method: &S<Identifier<'a>>, _: &[S<Value<'a>>])
 	                  -> ExecutionResult<Option<Value<'a>>> {
-		if target == &self.variables[&["std", "cin"].into()] {
-			if method == &Identifier("tie") {
+		if &target.node == &self.variables[&["std", "cin"].into()] {
+			if method.node == Identifier("tie") {
 				return Ok(Some(Value::Void));
 			}
 		}

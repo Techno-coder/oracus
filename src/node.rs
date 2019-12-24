@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::execute::{ExecutionContext, ExecutionResult};
-use crate::span::Spanned;
+use crate::span::S;
 use crate::symbol::SymbolContext;
 use crate::value::Value;
 
@@ -100,45 +100,44 @@ pub struct Program<'a> {
 pub trait Intrinsic: fmt::Debug {
 	fn register<'a>(&self, context: &mut SymbolContext<'a>);
 	fn variable<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                    variable: &Path<'a>) -> ExecutionResult<Option<Value<'a>>>;
+	                    variable: &S<Path<'a>>) -> ExecutionResult<Option<Value<'a>>>;
 	fn operation<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                     operator: BinaryOperator, left: &Value<'a>, right: &Value<'a>)
+	                     operator: BinaryOperator, left: &S<Value<'a>>, right: &S<Value<'a>>)
 	                     -> ExecutionResult<Option<Value<'a>>>;
 	fn function<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                    function: &Path<'a>, arguments: &[Value<'a>])
+	                    function: &S<Path<'a>>, arguments: &[S<Value<'a>>])
 	                    -> ExecutionResult<Option<Value<'a>>>;
 	fn method<'a, 'b>(&self, program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-	                  target: &Value<'a>, method: &Identifier<'a>, arguments: &[Value<'a>])
+	                  target: &S<Value<'a>>, method: &S<Identifier<'a>>, arguments: &[S<Value<'a>>])
 	                  -> ExecutionResult<Option<Value<'a>>>;
 }
 
 #[derive(Debug)]
 pub enum Root<'a> {
-	Include(Spanned<Identifier<'a>>),
-	UsingNamespace(Spanned<Identifier<'a>>),
-	Constant(Type<'a>, Identifier<'a>, Expression<'a>),
+	Include(S<Identifier<'a>>),
+	UsingNamespace(S<Identifier<'a>>),
 	Function(Function<'a>),
 }
 
 #[derive(Debug)]
 pub struct Function<'a> {
-	pub return_type: Type<'a>,
+	pub return_type: S<Type<'a>>,
 	pub identifier: Identifier<'a>,
-	pub parameters: Vec<(Identifier<'a>, Type<'a>)>,
-	pub body: Vec<Statement<'a>>,
+	pub parameters: Vec<(S<Identifier<'a>>, S<Type<'a>>)>,
+	pub body: Vec<S<Statement<'a>>>,
 }
 
 #[derive(Debug)]
 pub enum Statement<'a> {
-	Variable(Type<'a>, Vec<(Identifier<'a>, Option<Vec<Expression<'a>>>)>),
-	Conditional(Expression<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
-	ForLoop((Box<Statement<'a>>, Expression<'a>, Box<Statement<'a>>), Box<Statement<'a>>),
-	ForRange((Type<'a>, Identifier<'a>, Expression<'a>), Box<Statement<'a>>),
-	DoWhile(Box<Statement<'a>>, Expression<'a>),
-	While(Expression<'a>, Box<Statement<'a>>),
-	Return(Option<Expression<'a>>),
-	Expression(Expression<'a>),
-	Scope(Vec<Statement<'a>>),
+	Variable(S<Type<'a>>, Vec<(S<Identifier<'a>>, Option<Vec<S<Expression<'a>>>>)>),
+	Conditional(S<Expression<'a>>, Box<S<Statement<'a>>>, Option<Box<S<Statement<'a>>>>),
+	ForLoop((Box<S<Statement<'a>>>, S<Expression<'a>>, Box<S<Statement<'a>>>), Box<S<Statement<'a>>>),
+	ForRange((S<Type<'a>>, S<Identifier<'a>>, S<Expression<'a>>), Box<S<Statement<'a>>>),
+	DoWhile(Box<S<Statement<'a>>>, S<Expression<'a>>),
+	While(S<Expression<'a>>, Box<S<Statement<'a>>>),
+	Return(Option<S<Expression<'a>>>),
+	Expression(S<Expression<'a>>),
+	Scope(Vec<S<Statement<'a>>>),
 	Break,
 	Empty,
 }
@@ -163,20 +162,20 @@ pub enum Expression<'a> {
 	Boolean(bool),
 	String(&'a str),
 	Character(char),
-	Variable(Path<'a>),
-	InitializerList(Vec<Expression<'a>>),
-	Construction(Type<'a>, Vec<Expression<'a>>),
-	Unary(UnaryOperator, Box<Expression<'a>>),
-	PostUnary(PostUnaryOperator, Box<Expression<'a>>),
-	Binary(BinaryOperator, Box<Expression<'a>>, Box<Expression<'a>>),
-	BinaryAssign(ValueOperator, Box<Expression<'a>>, Box<Expression<'a>>),
-	Ternary(Box<Expression<'a>>, Box<Expression<'a>>, Box<Expression<'a>>),
-	Assign(Box<Expression<'a>>, Box<Expression<'a>>),
-	Index(Box<Expression<'a>>, Box<Expression<'a>>),
-	Field(Box<Expression<'a>>, Identifier<'a>),
-	FunctionCall(Path<'a>, Vec<Expression<'a>>),
-	MethodCall(Box<Expression<'a>>, Identifier<'a>, Vec<Expression<'a>>),
-	Dereference(Box<Expression<'a>>),
+	Variable(S<Path<'a>>),
+	InitializerList(Vec<S<Expression<'a>>>),
+	Construction(S<Type<'a>>, Vec<S<Expression<'a>>>),
+	Unary(UnaryOperator, Box<S<Expression<'a>>>),
+	PostUnary(PostUnaryOperator, Box<S<Expression<'a>>>),
+	Binary(BinaryOperator, Box<S<Expression<'a>>>, Box<S<Expression<'a>>>),
+	BinaryAssign(ValueOperator, Box<S<Expression<'a>>>, Box<S<Expression<'a>>>),
+	Ternary(Box<S<Expression<'a>>>, Box<S<Expression<'a>>>, Box<S<Expression<'a>>>),
+	Assign(Box<S<Expression<'a>>>, Box<S<Expression<'a>>>),
+	Index(Box<S<Expression<'a>>>, Box<S<Expression<'a>>>),
+	Field(Box<S<Expression<'a>>>, S<Identifier<'a>>),
+	FunctionCall(S<Path<'a>>, Vec<S<Expression<'a>>>),
+	MethodCall(Box<S<Expression<'a>>>, S<Identifier<'a>>, Vec<S<Expression<'a>>>),
+	Dereference(Box<S<Expression<'a>>>),
 }
 
 #[derive(Debug)]

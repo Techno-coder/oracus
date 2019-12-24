@@ -13,13 +13,15 @@ int& modify(int& x) {
 	return x;
 }
 
+int& bad() {
+	int i = 0;
+	return i;
+}
+
 int main() {
 	cin.tie(0);
 	ios::sync_with_stdio(false);
-
-	string test;
-	cin >> test;
-	cout << test << endl;
+	cout << bad() << endl;
 
 	int i = 0;
 	for (; i < 10; ++i) {
@@ -36,11 +38,13 @@ int main() {
 }
 	"#;
 
-	let mut program = oracus::parser::parse(&text).unwrap();
+	let mut program = oracus::parser::parse(&text)
+		.map_err(|error| oracus::span::emit(text, error)).unwrap();
 	program.intrinsics.push(Box::new(intrinsic::Stream::new()));
 	let main = Path::single(Identifier("main"));
 
 	let context = &mut ExecutionContext::default();
 	let function = program.functions[&main].first().unwrap();
-	println!("{:?}", execute::function(&program, context, function, Vec::new()));
+	println!("{:?}", execute::function(&program, context, function, Vec::new())
+		.map_err(|error| oracus::span::emit(text, error)));
 }

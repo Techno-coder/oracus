@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::node::{Function, Identifier, Path, Program, Statement, Type};
+use crate::span::{Span, Spanned};
 use crate::value::{self, Value};
 
-pub type ExecutionResult<T> = Result<T, ExecutionError>;
+pub type ExecutionResult<T> = Result<T, Spanned<ExecutionError>>;
 pub type Field<'a> = Identifier<'a>;
 
 #[derive(Debug)]
@@ -33,20 +34,21 @@ impl<'a, 'b> ExecutionContext<'a, 'b> {
 			.unwrap_or_else(|| panic!("Variable: {}, does not exist in context", path))
 	}
 
-	pub fn concrete(&mut self, value: Value<'a>) -> ExecutionResult<Value<'a>> {
-		match value {
-			Value::Reference(reference) => self.dereference(&reference),
+	pub fn concrete(&mut self, value: Spanned<Value<'a>>) -> ExecutionResult<Value<'a>> {
+		match value.node {
+			Value::Reference(reference) => self.dereference(&reference,
+				value.span).map(|(value, _)| value.clone()),
 			other => return Ok(other),
-		}.map(|(value, _)| value.clone())
+		}
 	}
 
-	pub fn dereference(&mut self, reference: &Reference<'a>)
+	pub fn dereference(&mut self, reference: &Reference<'a>, span: Span)
 	                   -> ExecutionResult<(&mut Value<'a>, &Type<'a>)> {
 		let Reference(frame, path, fields) = reference;
 		let (variable, structure) = self.frames.get_mut(frame)
 			.and_then(|frame| frame.variables.get_mut(path))
 			.map(|(variable, structure)| (variable, &*structure))
-			.ok_or(ExecutionError::InvalidReference)?;
+			.ok_or(Spanned::new(ExecutionError::InvalidReference, span))?;
 		Ok(fields.iter().fold((variable, structure), |(variable, _), field| match variable {
 			Value::Structure(structure) => structure.fields.get_mut(field)
 				.map(|(value, structure)| (value, &*structure)).unwrap_or_else(||
@@ -127,24 +129,26 @@ pub fn function<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 	context.function(function, |context| {
 		Iterator::zip(function.parameters.iter().cloned(),
 			arguments.into_iter()).for_each(|((identifier, structure), value)|
-			context.insert(Path::single(identifier), value, structure));
+			context.insert(Path::single(identifier.node), value, structure.node));
 		match (scope(program, context, &function.body)?, &function.return_type) {
-			(Execution::None, structure) if structure == &Type::void() => Ok(Value::Void),
-			(Execution::None, _) => Err(ExecutionError::VoidReturnValue),
-			(Execution::Break, _) => panic!("Cannot break from function"),
 			(Execution::Return(value), _) => Ok(value),
+			(Execution::Break, _) => panic!("Cannot break from function"),
+			(Execution::None, structure) => match structure.node == Type::void() {
+				false => Err(Spanned::new(ExecutionError::VoidReturnValue, structure.span)),
+				true => Ok(Value::Void),
+			}
 		}
 	})
 }
 
 pub fn execute<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-                       statement: &Statement<'a>) -> ExecutionResult<Execution<'a>> {
-	match statement {
+                       statement: &Spanned<Statement<'a>>) -> ExecutionResult<Execution<'a>> {
+	match &statement.node {
 		Statement::Variable(structure, variables) =>
 			variables.iter().try_for_each(|(identifier, arguments)| {
 				let value = arguments.as_ref().map(|arguments| value::construct(program,
-					context, structure, arguments)).unwrap_or(Ok(Value::Uninitialised))?;
-				Ok(context.insert(Path::single(identifier.clone()), value, structure.clone()))
+					context, &structure.node, arguments)).unwrap_or(Ok(Value::Uninitialised))?;
+				Ok(context.insert(Path::single(identifier.node.clone()), value, structure.node.clone()))
 			}).map(|_| Execution::None),
 		Statement::Conditional(condition, branch, default) =>
 			match value::concrete(program, context, condition)?.boolean() {
@@ -182,7 +186,7 @@ pub fn execute<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<
 			context, expression).map(|_| Execution::None),
 		Statement::Scope(statements) => scope(program, context, statements),
 		Statement::Return(expression) => expression.as_ref().map(|expression| {
-			let return_type = &context.frame().function.return_type;
+			let return_type = &context.frame().function.return_type.node;
 			value::parameter(program, context, return_type, expression)
 		}.map(Execution::Return)).unwrap_or(Ok(Execution::Return(Value::Void))),
 		Statement::Break => Ok(Execution::Break),
@@ -191,7 +195,7 @@ pub fn execute<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<
 }
 
 fn scope<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
-                 statements: &[Statement<'a>]) -> ExecutionResult<Execution<'a>> {
+                 statements: &[Spanned<Statement<'a>>]) -> ExecutionResult<Execution<'a>> {
 	context.scope(|context| statements.iter().map(|statement| execute(program, context, statement))
 		.find(|result| result.as_ref().map(|execution| execution != &Execution::None)
 			.unwrap_or(true)).unwrap_or(Ok(Execution::None)))

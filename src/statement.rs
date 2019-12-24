@@ -6,9 +6,9 @@ use crate::span::Spanned;
 use crate::symbol::SymbolContext;
 
 pub fn scope<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                 -> ParserResult<Vec<Statement<'a>>> {
-	parser::expect(lexer, Token::BraceOpen)?;
+                 -> ParserResult<Vec<Spanned<Statement<'a>>>> {
 	let mut statements = Vec::new();
+	parser::expect(lexer, Token::BraceOpen)?;
 	context.scope(|context| {
 		Ok(while lexer.peek().node != Token::BraceClose {
 			statements.push(statement(context, lexer)?);
@@ -17,16 +17,17 @@ pub fn scope<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 }
 
 fn statement<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                 -> ParserResult<Statement<'a>> {
+                 -> ParserResult<Spanned<Statement<'a>>> {
 	let statement = statement_head(context, lexer)?;
-	if statement.terminated() {
+	if statement.node.terminated() {
 		parser::expect(lexer, Token::Terminator)?;
 	}
 	Ok(statement)
 }
 
 fn statement_head<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                      -> ParserResult<Statement<'a>> {
+                      -> ParserResult<Spanned<Statement<'a>>> {
+	let span = lexer.peek().span;
 	match lexer.peek().node {
 		Token::Terminator => Ok(Statement::Empty),
 		Token::BraceOpen => Ok(Statement::Scope(scope(context, lexer)?)),
@@ -53,10 +54,11 @@ fn statement_head<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 				.map(Some).map(Statement::Return)
 		}
 		Token::Identifier("break") => lexer.thread(Ok(Statement::Break)),
-		Token::Identifier(_) => lexer.recover(|lexer| identifier(context, lexer))
+		Token::Identifier(_) => lexer
+			.recover(|lexer| identifier(context, lexer))
 			.or_else(|_| expression(context, lexer)),
 		_ => expression(context, lexer),
-	}
+	}.map(|statement| Spanned::new(statement, span))
 }
 
 fn expression<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
@@ -71,8 +73,8 @@ fn identifier<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 	let mut variables = Vec::new();
 	let structure = parser::parse_type(lexer)?;
 	parser::list_head(lexer, &Token::Terminator, |lexer| {
-		let identifier = parser::identifier(lexer)?.node;
-		context.variable(Path::single(identifier.clone()));
+		let identifier = parser::identifier(lexer)?;
+		context.variable(Path::single(identifier.node.clone()));
 		Ok(variables.push((identifier, match lexer.peek().node {
 			Token::BracketOpen => Some(expression::arguments(context, lexer)?),
 			Token::Assign => expression::expression_root(context, lexer.skip())
@@ -102,7 +104,7 @@ fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 	parser::expect(lexer, Token::BracketOpen)?;
 	context.scope(|context| lexer.recover(|lexer| -> ParserResult<_> {
 		let structure = parser::parse_type(lexer)?;
-		let identifier = parser::identifier(lexer)?.node;
+		let identifier = parser::identifier(lexer)?;
 		parser::expect(lexer, Token::Separator)?;
 
 		let expression = expression::expression_root(context, lexer)?;
@@ -110,19 +112,21 @@ fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		Ok((structure, identifier, expression))
 	}).map(|header| context.scope(|context| {
 		let (_, identifier, _) = &header;
-		context.variable(Path::single(identifier.clone()));
+		context.variable(Path::single(identifier.node.clone()));
 		let statement = statement(context, lexer)?;
 		Ok(Statement::ForRange(header, Box::new(statement)))
 	})).unwrap_or_else(|_| {
 		let initializer = statement(context, lexer)?;
-		let condition = match lexer.peek().node {
-			Token::Terminator => Ok(Expression::Boolean(true)),
+		let condition = match lexer.peek() {
+			Spanned { node: Token::Terminator, span } =>
+				Ok(Spanned::new(Expression::Boolean(true), *span)),
 			_ => expression::expression_root(context, lexer),
 		}?;
 
 		parser::expect(lexer, Token::Terminator)?;
-		let iteration = match lexer.peek().node {
-			Token::BracketClose => Ok(Statement::Empty),
+		let iteration = match lexer.peek() {
+			Spanned { node: Token::BracketClose, span } =>
+				Ok(Spanned::new(Statement::Empty, *span)),
 			_ => statement_head(context, lexer),
 		}?;
 

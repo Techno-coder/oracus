@@ -64,15 +64,73 @@ pub struct Lexer<'a> {
 	string: &'a str,
 	characters: Peekable<CharIndices<'a>>,
 	buffer: Option<Spanned<Token<'a>>>,
+	previous: Option<Span>,
 }
 
 impl<'a> Lexer<'a> {
 	pub fn new(string: &'a str) -> Self {
 		let characters = string.char_indices().peekable();
-		Lexer { string, characters, buffer: None }
+		Lexer { string, characters, buffer: None, previous: None }
 	}
 
 	pub fn next(&mut self) -> Spanned<Token<'a>> {
+		let token = self.token();
+		self.previous = Some(token.span);
+		token
+	}
+
+	pub fn peek(&mut self) -> &Spanned<Token<'a>> {
+		if self.buffer.is_none() {
+			self.buffer = Some(self.token());
+		}
+		self.buffer.as_ref().unwrap()
+	}
+
+	/// Executes the function only if the next token matches the target.
+	/// Does not consume any tokens if the comparison fails.
+	pub fn test<F, E>(&mut self, target: Token<'static>, function: F) -> Result<(), E>
+		where F: FnOnce(&mut Self) -> Result<(), E> {
+		match self.peek().node == target {
+			false => Ok(()),
+			true => {
+				self.next();
+				function(self)
+			}
+		}
+	}
+
+	/// Consumes the next token and returns the provided value.
+	pub fn thread<T>(&mut self, value: T) -> T {
+		self.next();
+		value
+	}
+
+	/// Consumes the next token and returns the lexer.
+	pub fn skip(&mut self) -> &mut Self {
+		self.next();
+		self
+	}
+
+	/// Applies the provided function and rolls back the lexer
+	/// if an error is returned.
+	pub fn recover<F, T, E>(&mut self, function: F) -> Result<T, E>
+		where F: FnOnce(&mut Self) -> Result<T, E> {
+		let recovery = self.clone();
+		match function(self) {
+			Ok(value) => Ok(value),
+			Err(error) => {
+				*self = recovery;
+				Err(error)
+			}
+		}
+	}
+
+	/// Returns the span of the previous token that was consumed.
+	pub fn previous(&self) -> Span {
+		self.previous.expect("Missing consumption of token")
+	}
+
+	fn token(&mut self) -> Spanned<Token<'a>> {
 		if let Some(token) = self.buffer.take() { return token; }
 		let (start, character) = match self.characters.next() {
 			None => return Spanned::new(Token::End,
@@ -154,52 +212,6 @@ impl<'a> Lexer<'a> {
 					"false" => Token::Boolean(false),
 					identifier => Token::Identifier(identifier),
 				}, Span(start, end))
-			}
-		}
-	}
-
-	pub fn peek(&mut self) -> &Spanned<Token<'a>> {
-		if self.buffer.is_none() {
-			self.buffer = Some(self.next());
-		}
-		self.buffer.as_ref().unwrap()
-	}
-
-	/// Executes the function only if the next token matches the target.
-	/// Does not consume any tokens if the comparison fails.
-	pub fn test<F, E>(&mut self, target: Token<'static>, function: F) -> Result<(), E>
-		where F: FnOnce(&mut Self) -> Result<(), E> {
-		match self.peek().node == target {
-			false => Ok(()),
-			true => {
-				self.next();
-				function(self)
-			}
-		}
-	}
-
-	/// Consumes the next token and returns the provided value.
-	pub fn thread<T>(&mut self, value: T) -> T {
-		self.next();
-		value
-	}
-
-	/// Consumes the next token and returns the lexer.
-	pub fn skip(&mut self) -> &mut Self {
-		self.next();
-		self
-	}
-
-	/// Applies the provided function and rolls back the lexer
-	/// if an error is returned.
-	pub fn recover<F, T, E>(&mut self, function: F) -> Result<T, E>
-		where F: FnOnce(&mut Self) -> Result<T, E> {
-		let recovery = self.clone();
-		match function(self) {
-			Ok(value) => Ok(value),
-			Err(error) => {
-				*self = recovery;
-				Err(error)
 			}
 		}
 	}

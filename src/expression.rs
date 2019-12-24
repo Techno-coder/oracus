@@ -5,15 +5,16 @@ use crate::span::Spanned;
 use crate::symbol::SymbolContext;
 
 pub fn expression_root<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                           -> ParserResult<Expression<'a>> {
+                           -> ParserResult<Spanned<Expression<'a>>> {
 	expression(context, lexer, 0)
 }
 
 fn expression<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
-                  precedence: usize) -> ParserResult<Expression<'a>> {
+                  precedence: usize) -> ParserResult<Spanned<Expression<'a>>> {
 	let mut left = terminal(context, lexer)?;
 	while self::precedence(&lexer.peek().node) > precedence {
-		left = binder(context, lexer, left)?;
+		let (span, node) = (left.span, binder(context, lexer, left)?);
+		left = Spanned::new(node, span.extend(lexer.previous()));
 	}
 	Ok(left)
 }
@@ -39,7 +40,7 @@ fn precedence(token: &Token) -> usize {
 }
 
 fn binder<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
-              mut left: Expression<'a>) -> ParserResult<Expression<'a>> {
+              mut left: Spanned<Expression<'a>>) -> ParserResult<Expression<'a>> {
 	let binder = lexer.next().node;
 	let precedence = precedence(&binder);
 
@@ -60,9 +61,9 @@ fn binder<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
 			return Ok(Expression::Index(Box::new(left), index));
 		}
 		Token::Access | Token::DereferenceAccess => {
-			let access = parser::identifier(lexer)?.node;
+			let access = parser::identifier(lexer)?;
 			if binder == Token::DereferenceAccess {
-				left = Expression::Dereference(Box::new(left));
+				left = left.wrap(Expression::Dereference);
 			}
 
 			return Ok(match lexer.peek().node {
@@ -117,42 +118,45 @@ fn binder<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>,
 }
 
 fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                -> ParserResult<Expression<'a>> {
+                -> ParserResult<Spanned<Expression<'a>>> {
 	if let Token::Identifier(_) = lexer.peek().node {
 		let recovery = lexer.clone();
 		let path = parser::path(lexer)?;
-		if let Some(variable) = context.resolve_variable(&path) {
-			return Ok(Expression::Variable(variable));
-		} else if let Some(function) = context.resolve_function(&path) {
-			let arguments = arguments(context, lexer)?;
-			return Ok(Expression::FunctionCall(function, arguments));
-		} else if context.resolve_structure(&path).is_some() {
+		let span = path.span;
+
+		if let Some(variable) = context.resolve_variable(&path.node) {
+			return Ok(Spanned::new(Expression::Variable(path.map(|_| variable)), span));
+		} else if let Some(function) = context.resolve_function(&path.node) {
+			let (path, arguments) = (path.map(|_| function), arguments(context, lexer)?);
+			return Ok(Spanned::new(Expression::FunctionCall(path, arguments), span));
+		} else if context.resolve_structure(&path.node).is_some() {
 			*lexer = recovery;
 			let structure = parser::parse_type(lexer)?;
 			let arguments = arguments(context, lexer)?;
-			return Ok(Expression::Construction(structure, arguments));
+			let expression = Expression::Construction(structure, arguments);
+			return Ok(Spanned::new(expression, span));
 		} else {
-			return Err(Spanned::new(ParserError::UndefinedPath, lexer.next().span));
+			return Err(Spanned::new(ParserError::UndefinedPath, span));
 		}
 	}
 
 	let token = lexer.next();
 	Ok(match token.node {
-		Token::Float(float) => Expression::Float(float),
-		Token::Integer(integer) => Expression::Integer(integer),
-		Token::Boolean(boolean) => Expression::Boolean(boolean),
-		Token::Character(character) => Expression::Character(character),
-		Token::String(string) => Expression::String(string),
-		Token::Asterisk => expression_root(context, lexer)
-			.map(Box::new).map(Expression::Dereference)?,
-		Token::Increment => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Increment, expression))?,
-		Token::Decrement => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Decrement, expression))?,
-		Token::Minus => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Minus, expression))?,
-		Token::Not => expression_root(context, lexer).map(Box::new)
-			.map(|expression| Expression::Unary(UnaryOperator::Not, expression))?,
+		Token::Float(float) => Spanned::new(Expression::Float(float), token.span),
+		Token::Integer(integer) => Spanned::new(Expression::Integer(integer), token.span),
+		Token::Boolean(boolean) => Spanned::new(Expression::Boolean(boolean), token.span),
+		Token::Character(character) => Spanned::new(Expression::Character(character), token.span),
+		Token::String(string) => Spanned::new(Expression::String(string), token.span),
+		Token::Asterisk => expression_root(context, lexer)?
+			.wrap(Expression::Dereference).prefix(token.span),
+		Token::Increment => expression_root(context, lexer)?.wrap(|expression|
+			Expression::Unary(UnaryOperator::Increment, expression)).prefix(token.span),
+		Token::Decrement => expression_root(context, lexer)?.wrap(|expression|
+			Expression::Unary(UnaryOperator::Decrement, expression)).prefix(token.span),
+		Token::Minus => expression_root(context, lexer)?.wrap(|expression|
+			Expression::Unary(UnaryOperator::Minus, expression)).prefix(token.span),
+		Token::Not => expression_root(context, lexer)?.wrap(|expression|
+			Expression::Unary(UnaryOperator::Not, expression)).prefix(token.span),
 		Token::BracketOpen => {
 			// TODO: Check for type cast
 			let expression = expression_root(context, lexer)?;
@@ -161,9 +165,10 @@ fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		}
 		Token::BraceOpen => {
 			let mut elements = Vec::new();
-			parser::list(lexer, Token::BraceClose, |lexer|
+			let span = parser::list(lexer, Token::BraceClose, |lexer|
 				Ok(elements.push(expression_root(context, lexer)?)))?;
-			Expression::InitializerList(elements)
+			Spanned::new(Expression::InitializerList(elements),
+				token.span.extend(span))
 		}
 		other => return Err(Spanned::new(match other {
 			Token::BracketClose => ParserError::UnmatchedBracket,
@@ -173,18 +178,15 @@ fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 }
 
 pub fn arguments<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
-                     -> ParserResult<Vec<Expression<'a>>> {
+                     -> ParserResult<Vec<Spanned<Expression<'a>>>> {
 	let mut arguments = Vec::new();
 	parser::expect(lexer, Token::BracketOpen)?;
-	parser::list(lexer, Token::BracketClose, |lexer|
-		Ok(arguments.push(expression_root(context, lexer)?)))
-		.map(|_| arguments)
+	parser::list(lexer, Token::BracketClose, |lexer| Ok(arguments
+		.push(expression_root(context, lexer)?))).map(|_| arguments)
 }
 
 #[cfg(test)]
 mod tests {
-	use crate::node::{Identifier, Path};
-
 	use super::*;
 
 	#[test]
