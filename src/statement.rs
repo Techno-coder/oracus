@@ -71,7 +71,7 @@ fn expression<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 fn identifier<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
                   -> ParserResult<Statement<'a>> {
 	let mut variables = Vec::new();
-	let structure = parser::parse_type(lexer)?;
+	let structure = parser::parse_type(context, lexer)?;
 	parser::list_head(lexer, &Token::Terminator, |lexer| {
 		let identifier = parser::identifier(lexer)?;
 		context.variable(Path::single(identifier.node.clone()));
@@ -103,7 +103,7 @@ fn for_construct<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 	parser::expect(lexer, Token::Identifier("for"))?;
 	parser::expect(lexer, Token::BracketOpen)?;
 	context.scope(|context| lexer.recover(|lexer| -> ParserResult<_> {
-		let structure = parser::parse_type(lexer)?;
+		let structure = parser::parse_type(context, lexer)?;
 		let identifier = parser::identifier(lexer)?;
 		parser::expect(lexer, Token::Separator)?;
 

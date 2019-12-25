@@ -89,7 +89,7 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 			Root::UsingNamespace(identifier)
 		}
 		Token::Identifier(_) => {
-			let return_type = parse_type(lexer)?;
+			let return_type = parse_type(context, lexer)?;
 			let identifier = identifier(lexer)?.node;
 			context.functions.insert(Path::single(identifier.clone()));
 
@@ -97,7 +97,7 @@ fn root<'a>(context: &mut SymbolContext<'a>, lexer: &mut Lexer<'a>)
 				let mut parameters = Vec::new();
 				expect(lexer, Token::BracketOpen)?;
 				list(lexer, Token::BracketClose, |lexer| {
-					let parameter_type = parse_type(lexer)?;
+					let parameter_type = parse_type(context, lexer)?;
 					let identifier = self::identifier(lexer)?;
 					context.variable(Path::single(identifier.node.clone()));
 					Ok(parameters.push((identifier, parameter_type)))
@@ -123,14 +123,17 @@ pub fn path<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Path<'a>>> {
 	Ok(path)
 }
 
-// TODO: Parse types based on symbol context
-pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Type<'a>>> {
+pub fn parse_type<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
+                      -> ParserResult<Spanned<Type<'a>>> {
 	let token = lexer.peek();
 	match token.node {
-		Token::Identifier("const") => Ok(parse_type(lexer.skip())?
+		Token::Identifier("const") => Ok(parse_type(context, lexer.skip())?
 			.map(|structure| Type::Constant(Box::new(structure)))),
 		Token::Identifier(_) => {
 			let mut path = path(lexer)?;
+			path.node = context.resolve_structure(&path.node)
+				.ok_or(Spanned::new(ParserError::UndefinedPath, path.span))?;
+
 			let Path(elements) = &mut path.node;
 			if elements.len() == 1 {
 				let Identifier(identifier) = &mut elements[0];
@@ -139,7 +142,7 @@ pub fn parse_type<'a>(lexer: &mut Lexer<'a>) -> ParserResult<Spanned<Type<'a>>> 
 
 			let mut templates = Vec::new();
 			lexer.test(Token::AngleLeft, |lexer| list(lexer, Token::AngleRight,
-				|lexer| Ok(templates.push(parse_type(lexer)?.node))).map(|_| ()))?;
+				|lexer| Ok(templates.push(parse_type(context, lexer)?.node))).map(|_| ()))?;
 
 			let mut concrete = path.map(|path| Type::Concrete(path, templates));
 			loop {
@@ -228,22 +231,26 @@ mod tests {
 
 	#[test]
 	fn test_type() {
-		assert!(parse_type(&mut Lexer::new("int")).is_ok());
-		assert!(parse_type(&mut Lexer::new("const int")).is_ok());
-		assert!(parse_type(&mut Lexer::new("int*")).is_ok());
-		assert!(parse_type(&mut Lexer::new("int&")).is_ok());
-		assert!(parse_type(&mut Lexer::new("const int&")).is_ok());
-		assert!(parse_type(&mut Lexer::new("vector<int>")).is_ok());
-		assert!(parse_type(&mut Lexer::new("pair<int, bool>")).is_ok());
-		assert!(parse_type(&mut Lexer::new("vector<pair<int, int>>")).is_ok());
+		let context = &mut SymbolContext::new();
+		context.structures.insert(["pair"].into());
+		context.structures.insert(["vector"].into());
+		assert!(parse_type(context, &mut Lexer::new("int")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("const int")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("int*")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("int&")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("const int&")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("vector<int>")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("pair<int, bool>")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("vector<pair<int, int>>")).is_ok());
 	}
 
 	#[test]
 	fn integer_type() {
-		assert!(parse_type(&mut Lexer::new("int")).is_ok());
-		assert!(parse_type(&mut Lexer::new("unsigned int")).is_ok());
-		assert!(parse_type(&mut Lexer::new("unsigned long")).is_ok());
-		assert!(parse_type(&mut Lexer::new("unsigned long long")).is_ok());
-		assert!(parse_type(&mut Lexer::new("long double")).is_ok());
+		let context = &SymbolContext::new();
+		assert!(parse_type(context, &mut Lexer::new("int")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("unsigned int")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("unsigned long")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("unsigned long long")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("long double")).is_ok());
 	}
 }

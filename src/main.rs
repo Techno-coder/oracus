@@ -30,7 +30,7 @@ int main() {
 	auto& value = modify(i);
 	value += 3;
 
-	std::pair<int, bool> p;
+	pair<int, bool> p;
 	p = {i, false};
 	p.first += 3;
 	cout << p.first << endl;

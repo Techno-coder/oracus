@@ -131,7 +131,7 @@ fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 			return Ok(Spanned::new(Expression::FunctionCall(path, arguments), span));
 		} else if context.resolve_structure(&path.node).is_some() {
 			*lexer = recovery;
-			let structure = parser::parse_type(lexer)?;
+			let structure = parser::parse_type(context, lexer)?;
 			let arguments = arguments(context, lexer)?;
 			let expression = Expression::Construction(structure, arguments);
 			return Ok(Spanned::new(expression, span));
