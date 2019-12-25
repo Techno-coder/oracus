@@ -1,6 +1,6 @@
 use crate::intrinsic;
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::node::{Function, Identifier, Intrinsic, Path, Program, Root, Type};
+use crate::node::{FloatKind, Function, Identifier, IntegralKind, IntegralRank, Intrinsic, Path, Program, Root, Type};
 use crate::span::{Span, Spanned};
 use crate::symbol::SymbolContext;
 
@@ -130,21 +130,15 @@ pub fn parse_type<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		Token::Identifier("const") => Ok(parse_type(context, lexer.skip())?
 			.map(|structure| Type::Constant(Box::new(structure)))),
 		Token::Identifier(_) => {
-			let mut path = path(lexer)?;
-			path.node = context.resolve_structure(&path.node)
-				.ok_or(Spanned::new(ParserError::UndefinedPath, path.span))?;
+			let mut concrete = numeric_type(lexer).transpose().unwrap_or_else(|| {
+				let mut templates = Vec::new();
+				let path = path(lexer)?.try_map(|path, span| context.resolve_structure(&path)
+					.ok_or(Spanned::new(ParserError::UndefinedPath, span)))?;
+				lexer.test(Token::AngleLeft, |lexer| list(lexer, Token::AngleRight,
+					|lexer| Ok(templates.push(parse_type(context, lexer)?.node))).map(|_| ()))?;
+				Ok(path.map(|path| Type::Concrete(path, templates)))
+			})?;
 
-			let Path(elements) = &mut path.node;
-			if elements.len() == 1 {
-				let Identifier(identifier) = &mut elements[0];
-				integer_type(lexer, identifier)?;
-			}
-
-			let mut templates = Vec::new();
-			lexer.test(Token::AngleLeft, |lexer| list(lexer, Token::AngleRight,
-				|lexer| Ok(templates.push(parse_type(context, lexer)?.node))).map(|_| ()))?;
-
-			let mut concrete = path.map(|path| Type::Concrete(path, templates));
 			loop {
 				concrete = match lexer.peek().node {
 					Token::Asterisk => concrete.map(|concrete|
@@ -159,30 +153,33 @@ pub fn parse_type<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 	}
 }
 
-fn integer_type(lexer: &mut Lexer, identifier: &mut &str) -> ParserResult<()> {
-	Ok(*identifier = match *identifier {
-		"unsigned" => {
-			let integer_token = self::identifier(lexer)?;
-			let Identifier(integer) = integer_token.node;
-			match integer {
-				"int" => "unsigned int",
-				"short" => "unsigned short",
-				"long" => match lexer.peek().node {
-					Token::Identifier("int") => lexer.thread("unsigned long int"),
-					Token::Identifier("long") => lexer.thread("unsigned long long"),
-					_ => "long",
-				}
-				_ => return Err(Spanned::new(ParserError::ExpectedUnsigned, integer_token.span)),
-			}
+fn numeric_type(lexer: &mut Lexer) -> ParserResult<Option<Spanned<Type<'static>>>> {
+	let span = lexer.peek().span;
+	let unsigned = match lexer.peek().node {
+		Token::Identifier("float") => return Ok(Some(lexer.next()
+			.map(|_| Type::Float(FloatKind::Float)))),
+		Token::Identifier("double") => return Ok(Some(lexer.next()
+			.map(|_| Type::Float(FloatKind::Double)))),
+		Token::Identifier("unsigned") => lexer.thread(true),
+		Token::Identifier(_) => false,
+		_ => return Ok(None),
+	};
+
+	let span = span.extend(lexer.peek().span);
+	let rank = match lexer.peek().node {
+		Token::Identifier("char") => lexer.thread(IntegralRank::Byte),
+		Token::Identifier("short") => lexer.thread(IntegralRank::Short),
+		Token::Identifier("int") => lexer.thread(IntegralRank::Integer),
+		Token::Identifier("long") => {
+			expect(lexer.skip(), Token::Identifier("long"))?;
+			IntegralRank::LongLong
 		}
-		"long" => match lexer.peek().node {
-			Token::Identifier("int") => lexer.thread("long int"),
-			Token::Identifier("long") => lexer.thread("long long"),
-			Token::Identifier("double") => lexer.thread("long double"),
-			_ => "long",
-		}
-		_ => return Ok(()),
-	})
+		_ if unsigned => return Err(Spanned::new(ParserError::ExpectedUnsigned, span)),
+		_ => return Ok(None),
+	};
+
+	let integral = IntegralKind { unsigned, rank };
+	Ok(Some(Spanned::new(Type::Integral(integral), span)))
 }
 
 pub fn list<'a, F>(lexer: &mut Lexer<'a>, close: Token<'static>, function: F)
@@ -248,9 +245,9 @@ mod tests {
 	fn integer_type() {
 		let context = &SymbolContext::new();
 		assert!(parse_type(context, &mut Lexer::new("int")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("char")).is_ok());
+		assert!(parse_type(context, &mut Lexer::new("short")).is_ok());
 		assert!(parse_type(context, &mut Lexer::new("unsigned int")).is_ok());
-		assert!(parse_type(context, &mut Lexer::new("unsigned long")).is_ok());
 		assert!(parse_type(context, &mut Lexer::new("unsigned long long")).is_ok());
-		assert!(parse_type(context, &mut Lexer::new("long double")).is_ok());
 	}
 }

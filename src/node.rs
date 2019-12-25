@@ -55,6 +55,8 @@ impl<'a> fmt::Display for Path<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
+	Float(FloatKind),
+	Integral(IntegralKind),
 	Concrete(Path<'a>, Vec<Type<'a>>),
 	Reference(Box<Type<'a>>),
 	Pointer(Box<Type<'a>>),
@@ -74,6 +76,8 @@ impl<'a> Type<'a> {
 impl<'a> fmt::Display for Type<'a> {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match self {
+			Type::Float(kind) => write!(f, "{}", kind),
+			Type::Integral(kind) => write!(f, "{}", kind),
 			Type::Concrete(path, templates) => {
 				match templates.split_last() {
 					None => write!(f, "{}", path),
@@ -87,6 +91,55 @@ impl<'a> fmt::Display for Type<'a> {
 			Type::Pointer(pointer) => write!(f, "{}*", pointer),
 			Type::Reference(reference) => write!(f, "{}&", reference),
 			Type::Constant(constant) => write!(f, "const {}", constant),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntegralKind {
+	pub unsigned: bool,
+	pub rank: IntegralRank,
+}
+
+impl fmt::Display for IntegralKind {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		if self.unsigned { write!(f, "unsigned ")?; }
+		write!(f, "{}", self.rank)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IntegralRank {
+	Byte,
+	Short,
+	Integer,
+	LongLong,
+	Unknown,
+}
+
+impl fmt::Display for IntegralRank {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			IntegralRank::Byte => write!(f, "char"),
+			IntegralRank::Short => write!(f, "short"),
+			IntegralRank::Integer => write!(f, "int"),
+			IntegralRank::LongLong => write!(f, "long long"),
+			IntegralRank::Unknown => write!(f, "integral"),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FloatKind {
+	Float,
+	Double,
+}
+
+impl fmt::Display for FloatKind {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			FloatKind::Float => write!(f, "float"),
+			FloatKind::Double => write!(f, "double"),
 		}
 	}
 }

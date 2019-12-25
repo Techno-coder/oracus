@@ -59,7 +59,6 @@ fn pair_assign<'a>(target: &mut Value<'a>, structure: &Type<'a>, value: &Value<'
 				return;
 			}
 		}
-
-		*target = value.clone();
 	}
+	*target = value.clone();
 }

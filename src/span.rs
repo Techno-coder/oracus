@@ -28,6 +28,11 @@ impl<T> Spanned<T> {
 		Spanned::new(apply(self.node), self.span)
 	}
 
+	pub fn try_map<F, R, E>(self, apply: F) -> Result<Spanned<R>, E>
+		where F: FnOnce(T, Span) -> Result<R, E> {
+		Ok(Spanned::new(apply(self.node, self.span)?, self.span))
+	}
+
 	pub fn wrap<F, R>(self, apply: F) -> Spanned<R> where F: FnOnce(Box<Spanned<T>>) -> R {
 		let span = self.span;
 		Spanned::new(apply(Box::new(self)), span)

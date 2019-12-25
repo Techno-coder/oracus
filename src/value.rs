@@ -13,7 +13,6 @@ pub enum Value<'a> {
 	Float(f64),
 	Integer(i128),
 	Boolean(bool),
-	Character(char),
 	String(std::string::String),
 	List(Vec<Value<'a>>),
 	Reference(Reference<'a>),
@@ -79,7 +78,7 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 		Expression::Integer(integer) => Integer(*integer),
 		Expression::Boolean(boolean) => Boolean(*boolean),
 		Expression::String(string) => String(string.to_string()),
-		Expression::Character(character) => Character(*character),
+		Expression::Character(character) => Integer(*character as u8 as i128),
 		Expression::Variable(variable) => {
 			let value = program.intrinsics.iter().map(|intrinsic| intrinsic
 				.variable(program, context, variable)).find_map(Result::transpose);
@@ -269,7 +268,6 @@ fn equal(left: Value, right: Value) -> bool {
 		(Float(left), Float(right)) => left == right,
 		(Integer(left), Integer(right)) => left == right,
 		(Boolean(left), Boolean(right)) => left == right,
-		(Character(left), Character(right)) => left == right,
 		(String(left), String(right)) => left == right,
 		(left, right) => panic!("Cannot equate values: {:?}, and {:?}", left, right),
 	}

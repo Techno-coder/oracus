@@ -1,5 +1,4 @@
 use oracus::execute::{self, ExecutionContext};
-use oracus::intrinsic;
 use oracus::node::{Identifier, Path};
 
 fn main() {
@@ -38,9 +37,8 @@ int main() {
 }
 	"#;
 
-	let mut program = oracus::parser::parse(&text)
+	let program = oracus::parser::parse(&text)
 		.map_err(|error| oracus::span::emit(text, error)).unwrap();
-	program.intrinsics.push(Box::new(intrinsic::Stream::new()));
 	let main = Path::single(Identifier("main"));
 
 	let context = &mut ExecutionContext::default();
