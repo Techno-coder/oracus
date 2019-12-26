@@ -12,6 +12,7 @@ pub enum ExecutionError {
 	InvalidReference,
 	IndexBounds,
 	VoidReturnValue,
+	IntegralOverflow,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]

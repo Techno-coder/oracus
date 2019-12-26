@@ -41,10 +41,12 @@ impl Intrinsic for Stream {
 				if &left.node == &self.variables[&["std", "cin"].into()] {
 					let reference = right.node.clone().reference(right.span);
 					let (value, structure) = context.dereference(&reference)?;
-					if let Type::Float(_) = structure {
+					if structure == &Type::single(["float"].into()) {
 						*value = Value::Float(read!());
-					} else if let Type::Integral(_) = structure {
-						*value = Value::Integer(read!());
+					} else if structure == &Type::single(["double"].into()) {
+						*value = Value::Float(read!());
+					} else if let Type::Integral(kind) = structure {
+						*value = Value::Integer(kind.clone(), read!());
 					} else if structure == &Type::single(["bool"].into()) {
 						let string: String = read!();
 						*value = Value::Boolean(&string == "1");
@@ -60,7 +62,7 @@ impl Intrinsic for Stream {
 				if &left.node == &self.variables[&["std", "cout"].into()] {
 					match &context.concrete(right.clone())? {
 						Value::Float(float) => print!("{}", float),
-						Value::Integer(integer) => print!("{}", integer),
+						Value::Integer(_, integer) => print!("{}", integer),
 						Value::Boolean(boolean) if *boolean => print!("1"),
 						Value::Boolean(boolean) if !*boolean => print!("0"),
 						Value::String(string) => print!("{}", string),

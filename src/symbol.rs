@@ -16,6 +16,8 @@ impl<'a> SymbolContext<'a> {
 		let mut context = SymbolContext::default();
 		context.frames.push(SymbolFrame::default());
 		context.structures.insert(["auto"].into());
+		context.structures.insert(["float"].into());
+		context.structures.insert(["double"].into());
 		context.structures.insert(["bool"].into());
 		context.variable(["nullptr"].into());
 		context

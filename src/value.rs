@@ -3,16 +3,16 @@ use std::ops::{Index, IndexMut};
 
 use Value::*;
 
-use crate::execute::{self, ExecutionContext, ExecutionResult, Field, Reference};
-use crate::node::{BinaryOperator, Expression, Identifier, PostUnaryOperator, Program,
-	Type, UnaryOperator, ValueOperator};
+use crate::execute::{self, ExecutionContext, ExecutionError, ExecutionResult, Field, Reference};
+use crate::node::{Expression, Identifier, IntegralKind, IntegralRank, Program, Type};
+use crate::operation;
 use crate::span::{Span, Spanned};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
 	Float(f64),
-	Integer(i128),
 	Boolean(bool),
+	Integer(IntegralKind, i128),
 	String(std::string::String),
 	List(Vec<Value<'a>>),
 	Reference(Reference<'a>),
@@ -73,12 +73,15 @@ impl<'a> IndexMut<&Identifier<'a>> for Structure<'a> {
 /// Evaluates an expression. Prefers to return a reference when possible.
 pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext<'a, 'b>,
                         expression: &Spanned<Expression<'a>>) -> ExecutionResult<Value<'a>> {
+	let span = expression.span;
 	Ok(match &expression.node {
 		Expression::Float(float) => Float(*float),
-		Expression::Integer(integer) => Integer(*integer),
+		Expression::Integer(integer) =>
+			Integer(IntegralKind(false, IntegralRank::Unknown), *integer),
 		Expression::Boolean(boolean) => Boolean(*boolean),
 		Expression::String(string) => String(string.to_string()),
-		Expression::Character(character) => Integer(*character as u8 as i128),
+		Expression::Character(character) => Integer(IntegralKind(false,
+			IntegralRank::Byte), *character as u8 as i128),
 		Expression::Variable(variable) => {
 			let value = program.intrinsics.iter().map(|intrinsic| intrinsic
 				.variable(program, context, variable)).find_map(Result::transpose);
@@ -92,85 +95,14 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 			concrete(program, context, expression)).collect::<Result<_, _>>().map(List)?,
 		Expression::Construction(structure, arguments) =>
 			construct(program, context, structure, arguments)?,
-		Expression::Unary(operator, expression) => {
-			let value = evaluate(program, context, expression)?;
-			if let Value::Reference(reference) = &value {
-				let reference = Spanned::new(reference.clone(), expression.span);
-				match (operator, context.dereference(&reference)?) {
-					(UnaryOperator::Increment, (Float(float), _)) =>
-						return Ok(Float(*thread(float, |float| **float += 1.0))),
-					(UnaryOperator::Decrement, (Float(float), _)) =>
-						return Ok(Float(*thread(float, |float| **float -= 1.0))),
-					(UnaryOperator::Increment, (Integer(integer), _)) =>
-						return Ok(Integer(*thread(integer, |integer| **integer += 1))),
-					(UnaryOperator::Decrement, (Integer(integer), _)) =>
-						return Ok(Integer(*thread(integer, |integer| **integer -= 1))),
-					_ => (),
-				}
-			}
-
-			let value = Spanned::new(value, expression.span);
-			match (&operator, context.concrete(value)?) {
-				(UnaryOperator::Minus, Float(float)) => Float(-float),
-				(UnaryOperator::Minus, Integer(integer)) => Integer(-integer),
-				(UnaryOperator::Not, Boolean(boolean)) => Boolean(!boolean),
-				(_, value) => panic!("Invalid operation: {:?}, on value: {:?}", operator, value),
-			}
-		}
-		Expression::PostUnary(operator, expression) => {
-			let value = evaluate(program, context, expression)?;
-			match (operator, context.dereference(&value.reference(expression.span))?) {
-				(PostUnaryOperator::Increment, (Float(float), _)) =>
-					Float(*thread(float, |float| **float += 1.0) - 1.0),
-				(PostUnaryOperator::Decrement, (Float(float), _)) =>
-					Float(*thread(float, |float| **float -= 1.0) + 1.0),
-				(PostUnaryOperator::Increment, (Integer(integer), _)) =>
-					Integer(*thread(integer, |integer| **integer += 1) - 1),
-				(PostUnaryOperator::Decrement, (Integer(integer), _)) =>
-					Integer(*thread(integer, |integer| **integer -= 1) + 1),
-				(_, value) => panic!("Invalid operation: {:?}, on value: {:?}", operator, value),
-			}
-		}
-		Expression::Binary(operator, left, right) => {
-			let left = Spanned::new(evaluate(program, context, left)?, left.span);
-			let right = Spanned::new(evaluate(program, context, right)?, right.span);
-			let value = program.intrinsics.iter().map(|intrinsic| intrinsic.operation(program,
-				context, operator.clone(), &left, &right)).find_map(Result::transpose);
-			if let Some(value) = value { return value; }
-
-			let left = context.concrete(left)?;
-			match (operator, &left) {
-				(BinaryOperator::LogicalOr, Boolean(true)) => return Ok(Boolean(true)),
-				(BinaryOperator::LogicalAnd, Boolean(false)) => return Ok(Boolean(false)),
-				_ => (),
-			}
-
-			// TODO: Implicit promotions
-			match (operator.clone(), left, context.concrete(right)?) {
-				(BinaryOperator::Equal, left, right) => Boolean(equal(left, right)),
-				(BinaryOperator::NotEqual, left, right) => Boolean(!equal(left, right)),
-				(BinaryOperator::LogicalOr, Boolean(left), Boolean(right)) => Boolean(left || right),
-				(BinaryOperator::LogicalAnd, Boolean(left), Boolean(right)) => Boolean(left && right),
-				(BinaryOperator::LessThan, Float(left), Float(right)) => Boolean(left < right),
-				(BinaryOperator::LessEqual, Float(left), Float(right)) => Boolean(left <= right),
-				(BinaryOperator::GreaterThan, Float(left), Float(right)) => Boolean(left > right),
-				(BinaryOperator::GreaterEqual, Float(left), Float(right)) => Boolean(left >= right),
-				(BinaryOperator::LessThan, Integer(left), Integer(right)) => Boolean(left < right),
-				(BinaryOperator::LessEqual, Integer(left), Integer(right)) => Boolean(left <= right),
-				(BinaryOperator::GreaterThan, Integer(left), Integer(right)) => Boolean(left > right),
-				(BinaryOperator::GreaterEqual, Integer(left), Integer(right)) => Boolean(left >= right),
-				(BinaryOperator::Value(operator), left, right) => value_operator(operator, left, right),
-				(operator, left, right) => panic!("Invalid operation: {:?}, on values: {:?}, and: {:?}",
-					operator, left, right),
-			}
-		}
-		Expression::BinaryAssign(operator, target, expression) => {
-			let reference = evaluate(program, context, target)?.reference(target.span);
-			let expression = concrete(program, context, expression)?;
-			let (target, _) = context.dereference(&reference)?;
-			*target = value_operator(operator.clone(), target.clone(), expression);
-			target.clone()
-		}
+		Expression::Unary(operator, expression) =>
+			operation::unary(program, context, &operator, expression)?,
+		Expression::PostUnary(operator, expression) =>
+			operation::post_unary(program, context, operator, &expression)?,
+		Expression::Binary(operator, left, right) => operation::binary(program,
+			context, expression, operator, left, right, span)?,
+		Expression::BinaryAssign(operator, target, expression) =>
+			operation::binary_assign(program, context, span, operator, target, expression)?,
 		Expression::Ternary(condition, branch, default) =>
 			match concrete(program, context, condition)?.boolean() {
 				true => evaluate(program, context, branch),
@@ -178,12 +110,24 @@ pub fn evaluate<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContext
 			}?,
 		Expression::Assign(target, expression) => {
 			let reference = evaluate(program, context, target)?.reference(target.span);
-			let expression = Spanned::new(concrete(program, context, expression)?, expression.span);
+			let mut expression = Spanned::new(concrete(program, context, expression)?, expression.span);
 			let value = program.intrinsics.iter().map(|intrinsic| intrinsic.assign(program,
 				context, &reference, &expression)).find_map(Result::transpose);
 			if let Some(value) = value { return value; }
 
 			let (target, _) = context.dereference(&reference)?;
+			match (&target, &mut expression.node) {
+				(Float(_), Integer(_, value)) =>
+					expression.node = Float(*value as f64),
+				(Integer(kind, _), Float(value)) => expression.node =
+					Integer(kind.clone(), numeric(kind, *value as i128, expression.span)?),
+				(Integer(kind, _), Integer(other, value)) => {
+					*other = kind.clone();
+					numeric(other, *value, expression.span)?;
+				}
+				_ => (),
+			}
+
 			*target = expression.node;
 			target.clone()
 		}
@@ -236,7 +180,21 @@ pub fn construct<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContex
 	if let Some(value) = value { return value; }
 	match arguments.len() {
 		0 => Ok(Value::Uninitialised),
-		1 => Ok(arguments.remove(0)),
+		1 => {
+			let mut value = arguments.remove(0);
+			match (&structure.node, &mut value) {
+				(Type::Integral(target), Integer(kind, integer)) => {
+					*kind = target.clone();
+					numeric(kind, *integer, structure.span)?;
+				}
+				(Type::Integral(kind), Float(float)) => value =
+					Integer(kind.clone(), numeric(kind, *float as i128, structure.span)?),
+				(_, Integer(_, integer)) if structure.node ==
+					Type::single(["float"].into()) => value = Float(*integer as f64),
+				_ => (),
+			}
+			Ok(value)
+		}
 		_ => panic!("No valid construction for type: {}", structure.node),
 	}
 }
@@ -258,38 +216,27 @@ pub fn parameter<'a, 'b>(program: &'b Program<'a>, context: &mut ExecutionContex
 	}
 }
 
-fn thread<F, T>(mut value: T, function: F) -> T where F: FnOnce(&mut T) {
+pub fn numeric(IntegralKind(unsigned, rank): &IntegralKind, integer: i128,
+               span: Span) -> ExecutionResult<i128> {
+	let bounds = match (unsigned, rank) {
+		(&false, &IntegralRank::Byte) => i8::min_value() as i128..=i8::max_value() as i128,
+		(&false, &IntegralRank::Short) => i16::min_value() as i128..=i16::max_value() as i128,
+		(&false, &IntegralRank::Integer) => i32::min_value() as i128..=i32::max_value() as i128,
+		(&false, &IntegralRank::LongLong) => i64::min_value() as i128..=i64::max_value() as i128,
+		(&true, &IntegralRank::Byte) => 0..=u8::max_value() as i128,
+		(&true, &IntegralRank::Short) => 0..=u16::max_value() as i128,
+		(&true, &IntegralRank::Integer) => 0..=u32::max_value() as i128,
+		(&true, &IntegralRank::LongLong) => 0..=u64::max_value() as i128,
+		(_, &IntegralRank::Unknown) => i128::min_value()..=i128::max_value(),
+	};
+
+	match bounds.contains(&integer) {
+		false => Err(Spanned::new(ExecutionError::IntegralOverflow, span)),
+		true => Ok(integer),
+	}
+}
+
+pub fn thread<F, T>(mut value: T, function: F) -> T where F: FnOnce(&mut T) {
 	function(&mut value);
 	value
-}
-
-fn equal(left: Value, right: Value) -> bool {
-	match (left, right) {
-		(Float(left), Float(right)) => left == right,
-		(Integer(left), Integer(right)) => left == right,
-		(Boolean(left), Boolean(right)) => left == right,
-		(String(left), String(right)) => left == right,
-		(left, right) => panic!("Cannot equate values: {:?}, and {:?}", left, right),
-	}
-}
-
-fn value_operator<'a>(operator: ValueOperator, left: Value<'a>, right: Value<'a>) -> Value<'a> {
-	match (operator, left, right) {
-		(ValueOperator::Add, Float(left), Float(right)) => Float(left + right),
-		(ValueOperator::Minus, Float(left), Float(right)) => Float(left - right),
-		(ValueOperator::Multiply, Float(left), Float(right)) => Float(left * right),
-		(ValueOperator::Divide, Float(left), Float(right)) => Float(left / right),
-		(ValueOperator::Modulo, Float(left), Float(right)) => Float(left % right),
-		(ValueOperator::Add, Integer(left), Integer(right)) => Integer(left + right),
-		(ValueOperator::Minus, Integer(left), Integer(right)) => Integer(left - right),
-		(ValueOperator::Multiply, Integer(left), Integer(right)) => Integer(left * right),
-		(ValueOperator::Divide, Integer(left), Integer(right)) => Integer(left / right),
-		(ValueOperator::Modulo, Integer(left), Integer(right)) => Integer(left % right),
-		(ValueOperator::And, Integer(left), Integer(right)) => Integer(left & right),
-		(ValueOperator::Or, Integer(left), Integer(right)) => Integer(left | right),
-		(ValueOperator::ShiftLeft, Integer(left), Integer(right)) => Integer(left << right),
-		(ValueOperator::ShiftRight, Integer(left), Integer(right)) => Integer(left >> right),
-		(operator, left, right) => panic!("Invalid operation: {:?}, on values: {:?}, and: {:?}",
-			operator, left, right),
-	}
 }

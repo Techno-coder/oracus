@@ -9,5 +9,6 @@ pub mod symbol;
 pub mod statement;
 pub mod intrinsic;
 pub mod execute;
+pub mod operation;
 pub mod value;
 pub mod span;

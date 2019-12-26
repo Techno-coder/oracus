@@ -1,6 +1,7 @@
 use crate::intrinsic;
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::node::{FloatKind, Function, Identifier, IntegralKind, IntegralRank, Intrinsic, Path, Program, Root, Type};
+use crate::node::{Function, Identifier, IntegralKind, IntegralRank,
+	Intrinsic, Path, Program, Root, Type};
 use crate::span::{Span, Spanned};
 use crate::symbol::SymbolContext;
 
@@ -156,10 +157,6 @@ pub fn parse_type<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 fn numeric_type(lexer: &mut Lexer) -> ParserResult<Option<Spanned<Type<'static>>>> {
 	let span = lexer.peek().span;
 	let unsigned = match lexer.peek().node {
-		Token::Identifier("float") => return Ok(Some(lexer.next()
-			.map(|_| Type::Float(FloatKind::Float)))),
-		Token::Identifier("double") => return Ok(Some(lexer.next()
-			.map(|_| Type::Float(FloatKind::Double)))),
 		Token::Identifier("unsigned") => lexer.thread(true),
 		Token::Identifier(_) => false,
 		_ => return Ok(None),
@@ -178,7 +175,7 @@ fn numeric_type(lexer: &mut Lexer) -> ParserResult<Option<Spanned<Type<'static>>
 		_ => return Ok(None),
 	};
 
-	let integral = IntegralKind { unsigned, rank };
+	let integral = IntegralKind(unsigned, rank);
 	Ok(Some(Spanned::new(Type::Integral(integral), span)))
 }
 

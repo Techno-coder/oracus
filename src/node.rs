@@ -55,7 +55,6 @@ impl<'a> fmt::Display for Path<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
-	Float(FloatKind),
 	Integral(IntegralKind),
 	Concrete(Path<'a>, Vec<Type<'a>>),
 	Reference(Box<Type<'a>>),
@@ -76,7 +75,6 @@ impl<'a> Type<'a> {
 impl<'a> fmt::Display for Type<'a> {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match self {
-			Type::Float(kind) => write!(f, "{}", kind),
 			Type::Integral(kind) => write!(f, "{}", kind),
 			Type::Concrete(path, templates) => {
 				match templates.split_last() {
@@ -96,25 +94,23 @@ impl<'a> fmt::Display for Type<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct IntegralKind {
-	pub unsigned: bool,
-	pub rank: IntegralRank,
-}
+pub struct IntegralKind(pub bool, pub IntegralRank);
 
 impl fmt::Display for IntegralKind {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		if self.unsigned { write!(f, "unsigned ")?; }
-		write!(f, "{}", self.rank)
+		let IntegralKind(unsigned, rank) = self;
+		if *unsigned { write!(f, "unsigned ")?; }
+		write!(f, "{}", rank)
 	}
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum IntegralRank {
-	Byte,
-	Short,
-	Integer,
-	LongLong,
-	Unknown,
+	Byte = 1,
+	Short = 2,
+	Integer = 3,
+	LongLong = 4,
+	Unknown = 0,
 }
 
 impl fmt::Display for IntegralRank {
@@ -125,21 +121,6 @@ impl fmt::Display for IntegralRank {
 			IntegralRank::Integer => write!(f, "int"),
 			IntegralRank::LongLong => write!(f, "long long"),
 			IntegralRank::Unknown => write!(f, "integral"),
-		}
-	}
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum FloatKind {
-	Float,
-	Double,
-}
-
-impl fmt::Display for FloatKind {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match self {
-			FloatKind::Float => write!(f, "float"),
-			FloatKind::Double => write!(f, "double"),
 		}
 	}
 }
