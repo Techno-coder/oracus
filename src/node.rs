@@ -1,10 +1,6 @@
-use std::collections::HashMap;
 use std::fmt;
 
-use crate::execute::{ExecutionContext, ExecutionResult, Reference};
 use crate::span::S;
-use crate::symbol::SymbolContext;
-use crate::value::Value;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Identifier<'a>(pub &'a str);
@@ -127,29 +123,7 @@ impl fmt::Display for IntegralRank {
 
 #[derive(Debug, Default)]
 pub struct Program<'a> {
-	pub functions: HashMap<Path<'a>, Vec<Function<'a>>>,
-	pub intrinsics: Vec<Box<dyn Intrinsic>>,
-}
-
-pub trait Intrinsic: fmt::Debug {
-	fn register<'a>(&self, context: &mut SymbolContext<'a>);
-	fn variable<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                    _variable: &S<Path<'a>>) -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
-	fn operation<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                     _operator: BinaryOperator, _left: &S<Value<'a>>, _right: &S<Value<'a>>)
-	                     -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
-	fn function<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                    _function: &S<Path<'a>>, _arguments: &[S<Value<'a>>])
-	                    -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
-	fn method<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                  _target: &S<Value<'a>>, _method: &S<Identifier<'a>>, _arguments: &[S<Value<'a>>])
-	                  -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
-	fn assign<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                  _target: &S<Reference<'a>>, _value: &S<Value<'a>>)
-	                  -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
-	fn construct<'a, 'b>(&self, _program: &'b Program<'a>, _context: &mut ExecutionContext<'a, 'b>,
-	                     _structure: &S<Type<'a>>, _arguments: &[Value<'a>])
-	                     -> ExecutionResult<Option<Value<'a>>> { Ok(None) }
+	pub roots: Vec<Root<'a>>,
 }
 
 #[derive(Debug)]

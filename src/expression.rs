@@ -124,20 +124,20 @@ fn terminal<'a>(context: &SymbolContext<'a>, lexer: &mut Lexer<'a>)
 		let path = parser::path(lexer)?;
 		let span = path.span;
 
-		if let Some(variable) = context.resolve_variable(&path.node) {
-			return Ok(Spanned::new(Expression::Variable(path.map(|_| variable)), span));
+		return if let Some(variable) = context.resolve_variable(&path.node) {
+			Ok(Spanned::new(Expression::Variable(path.map(|_| variable)), span))
 		} else if let Some(function) = context.resolve_function(&path.node) {
 			let (path, arguments) = (path.map(|_| function), arguments(context, lexer)?);
-			return Ok(Spanned::new(Expression::FunctionCall(path, arguments), span));
+			Ok(Spanned::new(Expression::FunctionCall(path, arguments), span))
 		} else if context.resolve_structure(&path.node).is_some() {
 			*lexer = recovery;
 			let structure = parser::parse_type(context, lexer)?;
 			let arguments = arguments(context, lexer)?;
 			let expression = Expression::Construction(structure, arguments);
-			return Ok(Spanned::new(expression, span));
+			Ok(Spanned::new(expression, span))
 		} else {
-			return Err(Spanned::new(ParserError::UndefinedPath, span));
-		}
+			Err(Spanned::new(ParserError::UndefinedPath, span))
+		};
 	}
 
 	let token = lexer.next();

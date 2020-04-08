@@ -1,7 +1,6 @@
-use crate::intrinsic;
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::node::{Function, Identifier, IntegralKind, IntegralRank,
-	Intrinsic, Path, Program, Root, Type};
+use crate::node::{Function, Identifier, IntegralKind,
+	IntegralRank, Path, Program, Root, Type};
 use crate::span::{Span, Spanned};
 use crate::symbol::SymbolContext;
 
@@ -26,47 +25,7 @@ pub fn parse(string: &str) -> ParserResult<Program> {
 	let context = &mut SymbolContext::new();
 	let mut program = Program::default();
 	while let Some(root) = root(context, lexer)? {
-		match root {
-			Root::Function(function) => {
-				let path = Path::single(function.identifier.clone());
-				let entry = program.functions.entry(path);
-				entry.or_default().push(function);
-			}
-			Root::Include(header) => match header.node {
-				Identifier("iostream") => Some(Box::new(intrinsic::Stream::new()) as Box<_>),
-				Identifier("algorithm") => {
-					context.functions.insert(Path(vec![Identifier("std"), Identifier("sort")]));
-					context.functions.insert(Path(vec![Identifier("std"), Identifier("swap")]));
-					None
-				}
-				Identifier("utility") => Some(Box::new(intrinsic::Utility) as Box<_>),
-				Identifier("vector") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("vector")]));
-					None
-				}
-				Identifier("stack") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("stack")]));
-					None
-				}
-				Identifier("map") => {
-					context.structures.insert(Path(vec![Identifier("std"), Identifier("map")]));
-					None
-				}
-				Identifier("climits") => {
-					context.variable(Path::single(Identifier("INT_MAX")));
-					None
-				}
-				Identifier("cassert") => {
-					context.functions.insert(Path::single(Identifier("assert")));
-					None
-				}
-				_ => None,
-			}.into_iter().for_each(|intrinsic: Box<dyn Intrinsic>| {
-				intrinsic.register(context);
-				program.intrinsics.push(intrinsic);
-			}),
-			_ => (),
-		}
+		program.roots.push(root);
 	}
 	Ok(program)
 }

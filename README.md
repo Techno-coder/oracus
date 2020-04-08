@@ -1,2 +1,2 @@
 # oracus
-A C++ parser and interpreter.
+A C++ parser.
